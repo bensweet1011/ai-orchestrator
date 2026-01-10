@@ -250,14 +250,20 @@ class LLMClients:
             raw_response=response
         )
     
-    def embed(self, text: str) -> list:
-        """Generate embedding using OpenAI."""
+    def embed(self, text: str, dimensions: int = 1024) -> list:
+        """Generate embedding using OpenAI.
+
+        Args:
+            text: Text to embed
+            dimensions: Output dimensions (must match Pinecone index, default 1024)
+        """
         if "openai" not in self.clients:
             raise RuntimeError("OpenAI client required for embeddings")
-        
+
         response = self.clients["openai"].embeddings.create(
             model="text-embedding-3-small",
-            input=text[:8000]  # Truncate to avoid token limits
+            input=text[:8000],  # Truncate to avoid token limits
+            dimensions=dimensions,
         )
         return response.data[0].embedding
 

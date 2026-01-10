@@ -7,8 +7,8 @@ import os
 import time
 import hashlib
 from datetime import datetime
-from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, asdict
+from typing import Dict, List, Optional
+from dataclasses import dataclass
 
 from pinecone import Pinecone
 
@@ -18,6 +18,7 @@ from .llm_clients import LLMResponse
 @dataclass
 class InteractionLog:
     """Record of a single LLM interaction."""
+
     id: str
     timestamp: str
     session_id: str
@@ -43,34 +44,45 @@ class Memory:
     - Project history retrieval
     - Feedback/rating storage
     """
-    
+
     def __init__(self, index_name: str = "llm-logs"):
         self.pc = Pinecone(api_key=os.environ.get("PINECONE_API_KEY"))
         self.index = self.pc.Index(index_name)
-        
+
         # Session tracking
         self.session_id = self._generate_id("session")
         self.current_project = "default"
         self.current_task = "general"
-    
+
+        # LLM clients for embeddings
+        self._llm_clients = None
+
+    def _get_embedding(self, text: str) -> List[float]:
+        """Generate embedding for text using OpenAI."""
+        if self._llm_clients is None:
+            from .llm_clients import get_clients
+
+            self._llm_clients = get_clients()
+        return self._llm_clients.embed(text)
+
     def _generate_id(self, prefix: str = "log") -> str:
         """Generate unique ID."""
         ts = datetime.utcnow().isoformat()
         unique = hashlib.md5(f"{ts}{time.time_ns()}".encode()).hexdigest()[:8]
         return f"{prefix}_{unique}"
-    
+
     def set_context(self, project: str = None, task: str = None):
         """Set current project and task context."""
         if project:
             self.current_project = project
         if task:
             self.current_task = task
-    
+
     def new_session(self) -> str:
         """Start a new session."""
         self.session_id = self._generate_id("session")
         return self.session_id
-    
+
     def log(
         self,
         prompt: str,
@@ -78,7 +90,7 @@ class Memory:
         latency_ms: int,
         project: str = None,
         task: str = None,
-        metadata: Dict = None
+        metadata: Dict = None,
     ) -> str:
         """
         Log an LLM interaction to Pinecone.
@@ -86,7 +98,7 @@ class Memory:
         """
         log_id = self._generate_id("log")
         timestamp = datetime.utcnow().isoformat()
-        
+
         # Create log record
         log = InteractionLog(
             id=log_id,
@@ -98,20 +110,25 @@ class Memory:
             provider=response.provider,
             prompt=prompt,
             response=response.content,
-            prompt_tokens=response.usage.get("input_tokens") if response.usage else None,
-            response_tokens=response.usage.get("output_tokens") if response.usage else None,
+            prompt_tokens=(
+                response.usage.get("input_tokens") if response.usage else None
+            ),
+            response_tokens=(
+                response.usage.get("output_tokens") if response.usage else None
+            ),
             latency_ms=latency_ms,
-            metadata=metadata
+            metadata=metadata,
         )
-        
+
         # Create text for embedding (prompt + response for semantic search)
-        # Pinecone will automatically generate embeddings using llama-text-embed-v2
         embed_text = f"PROMPT: {prompt[:2000]}\n\nRESPONSE: {response.content[:2000]}"
-        
+
+        # Generate embedding using OpenAI
+        embedding = self._get_embedding(embed_text)
+
         # Prepare metadata for Pinecone (must be flat, string values for filtering)
-        # The "text" field is used by Pinecone's integrated embeddings (llama-text-embed-v2)
         pinecone_metadata = {
-            "text": embed_text,  # This field is used for integrated embeddings
+            "text": embed_text,
             "timestamp": timestamp,
             "session_id": self.session_id,
             "project": log.project,
@@ -122,26 +139,20 @@ class Memory:
             "prompt_preview": prompt[:500],
             "response_preview": response.content[:500],
         }
-        
+
         if metadata:
             for k, v in metadata.items():
                 pinecone_metadata[f"meta_{k}"] = str(v)[:500]
-        
-        # Store in Pinecone with integrated embeddings
-        # Pinecone will automatically generate embeddings from the "text" field
-        self.index.upsert(vectors=[{
-            "id": log_id,
-            "metadata": pinecone_metadata
-        }])
-        
+
+        # Store in Pinecone with embedding vector
+        self.index.upsert(
+            vectors=[{"id": log_id, "values": embedding, "metadata": pinecone_metadata}]
+        )
+
         return log_id
-    
+
     def search(
-        self,
-        query: str,
-        n_results: int = 5,
-        project: str = None,
-        task: str = None
+        self, query: str, n_results: int = 5, project: str = None, task: str = None
     ) -> List[Dict]:
         """
         Semantic search across logged interactions.
@@ -153,56 +164,46 @@ class Memory:
             filter_dict["project"] = {"$eq": project}
         if task:
             filter_dict["task"] = {"$eq": task}
-        
-        # Search using Pinecone's integrated embeddings
-        # Pass raw query text - Pinecone will automatically generate embeddings
-        # For integrated embeddings, pass text as a list in the data parameter
+
+        # Generate query embedding
+        query_embedding = self._get_embedding(query)
+
+        # Search using embedding vector
         results = self.index.query(
-            data=[query],  # Raw text query as list - Pinecone handles embedding with llama-text-embed-v2
+            vector=query_embedding,
             top_k=n_results,
             include_metadata=True,
-            filter=filter_dict if filter_dict else None
+            filter=filter_dict if filter_dict else None,
         )
-        
+
         return [
-            {
-                "id": match["id"],
-                "score": match["score"],
-                "metadata": match["metadata"]
-            }
+            {"id": match["id"], "score": match["score"], "metadata": match["metadata"]}
             for match in results["matches"]
         ]
-    
+
     def get_project_history(self, project: str, limit: int = 50) -> List[Dict]:
         """Get all interactions for a project."""
         results = self.search(
-            query=f"project {project}",
-            n_results=limit,
-            project=project
+            query=f"project {project}", n_results=limit, project=project
         )
         # Sort by timestamp
         results.sort(key=lambda x: x["metadata"].get("timestamp", ""))
         return results
-    
+
     def get_context_for_prompt(
-        self,
-        prompt: str,
-        n_results: int = 3,
-        project: str = None
+        self, prompt: str, n_results: int = 3, project: str = None
     ) -> str:
         """
         Retrieve relevant past context to inject into a new prompt.
         Returns formatted context string.
         """
         results = self.search(
-            query=prompt,
-            n_results=n_results,
-            project=project or self.current_project
+            query=prompt, n_results=n_results, project=project or self.current_project
         )
-        
+
         if not results:
             return ""
-        
+
         context_parts = ["Relevant past interactions:"]
         for r in results:
             meta = r["metadata"]
@@ -212,57 +213,59 @@ class Memory:
                 f"Prompt: {meta.get('prompt_preview', 'N/A')}\n"
                 f"Response: {meta.get('response_preview', 'N/A')}"
             )
-        
+
         return "\n".join(context_parts)
-    
+
     def add_feedback(self, log_id: str, rating: int, notes: str = None):
         """Add feedback/rating to a logged interaction."""
         # Fetch existing
         result = self.index.fetch(ids=[log_id])
-        
+
         if log_id not in result["vectors"]:
             raise ValueError(f"Log ID not found: {log_id}")
-        
+
         existing = result["vectors"][log_id]
         metadata = existing["metadata"]
-        
+        values = existing.get("values", [])
+
         # Update with feedback
         metadata["rating"] = rating
         metadata["feedback_timestamp"] = datetime.utcnow().isoformat()
         if notes:
             metadata["feedback_notes"] = notes[:500]
-        
-        # Re-upsert (with integrated embeddings, we don't need to pass values)
-        # Pinecone will regenerate embeddings from the "text" field in metadata
-        self.index.upsert(vectors=[{
-            "id": log_id,
-            "metadata": metadata
-        }])
-    
+
+        # Re-upsert with existing values
+        self.index.upsert(
+            vectors=[{"id": log_id, "values": values, "metadata": metadata}]
+        )
+
     def generate_project_report(self, project: str) -> str:
         """
         Generate a narrative report of project history.
         Uses Claude to synthesize the report.
         """
         history = self.get_project_history(project)
-        
+
         if not history:
             return f"No logged interactions found for project: {project}"
-        
+
         # Format history
-        history_text = "\n\n---\n\n".join([
-            f"**{entry['metadata'].get('timestamp', 'Unknown')}**\n"
-            f"Task: {entry['metadata'].get('task', 'general')}\n"
-            f"Model: {entry['metadata'].get('model', 'unknown')}\n"
-            f"Prompt: {entry['metadata'].get('prompt_preview', 'N/A')}\n"
-            f"Response: {entry['metadata'].get('response_preview', 'N/A')}"
-            for entry in history[:30]  # Limit to avoid token issues
-        ])
-        
+        history_text = "\n\n---\n\n".join(
+            [
+                f"**{entry['metadata'].get('timestamp', 'Unknown')}**\n"
+                f"Task: {entry['metadata'].get('task', 'general')}\n"
+                f"Model: {entry['metadata'].get('model', 'unknown')}\n"
+                f"Prompt: {entry['metadata'].get('prompt_preview', 'N/A')}\n"
+                f"Response: {entry['metadata'].get('response_preview', 'N/A')}"
+                for entry in history[:30]  # Limit to avoid token issues
+            ]
+        )
+
         # Use Claude to synthesize
         from .llm_clients import get_clients
+
         clients = get_clients()
-        
+
         synthesis_prompt = f"""Review this project history and create a report:
 
 1. Summary: What this project accomplished
@@ -277,13 +280,14 @@ History:
 {history_text}
 
 Generate a clear, structured report."""
-        
+
         response = clients.call(synthesis_prompt, model="claude")
         return response.content
 
 
 # Singleton
 _memory: Optional[Memory] = None
+
 
 def get_memory() -> Memory:
     """Get or create Memory singleton."""

@@ -63,6 +63,17 @@ class MemoryStore:
         self._namespaces: Dict[str, MemoryNamespace] = {}
         self._load_namespace_cache()
 
+        # LLM clients for embeddings
+        self._llm_clients = None
+
+    def _get_embedding(self, text: str) -> List[float]:
+        """Generate embedding for text using OpenAI."""
+        if self._llm_clients is None:
+            from ..core.llm_clients import get_clients
+
+            self._llm_clients = get_clients()
+        return self._llm_clients.embed(text)
+
     def _generate_id(self, prefix: str = "mem") -> str:
         """Generate unique ID."""
         ts = datetime.utcnow().isoformat()
@@ -167,8 +178,9 @@ class MemoryStore:
             errors=result.errors,
         )
 
-        # Generate embedding text
+        # Generate embedding text and vector
         embed_text = pipeline_memory.get_embedding_text()
+        embedding = self._get_embedding(embed_text[:8000])
 
         # Prepare metadata for Pinecone
         metadata = {
@@ -191,7 +203,7 @@ class MemoryStore:
         # Store in Pinecone with namespace
         namespace = self._get_namespace(project)
         self.index.upsert(
-            vectors=[{"id": memory_id, "metadata": metadata}],
+            vectors=[{"id": memory_id, "values": embedding, "metadata": metadata}],
             namespace=namespace,
         )
 
@@ -279,9 +291,12 @@ class MemoryStore:
         if success_only:
             filter_dict["success"] = {"$eq": True}
 
-        # Query Pinecone
+        # Generate query embedding
+        query_embedding = self._get_embedding(query)
+
+        # Query Pinecone with vector
         results = self.index.query(
-            data=[query],
+            vector=query_embedding,
             top_k=limit,
             include_metadata=True,
             filter=filter_dict,
@@ -414,10 +429,15 @@ class MemoryStore:
             for k, v in metadata.items():
                 pinecone_metadata[f"meta_{k}"] = str(v)[:500]
 
+        # Generate embedding
+        embedding = self._get_embedding(content[:8000])
+
         # Store with namespace
         namespace = self._get_namespace(project)
         self.index.upsert(
-            vectors=[{"id": memory_id, "metadata": pinecone_metadata}],
+            vectors=[
+                {"id": memory_id, "values": embedding, "metadata": pinecone_metadata}
+            ],
             namespace=namespace,
         )
 
@@ -452,9 +472,12 @@ class MemoryStore:
         if memory_types:
             filter_dict["memory_type"] = {"$in": [mt.value for mt in memory_types]}
 
-        # Query
+        # Generate query embedding
+        query_embedding = self._get_embedding(query)
+
+        # Query with vector
         results = self.index.query(
-            data=[query],
+            vector=query_embedding,
             top_k=limit,
             include_metadata=True,
             filter=filter_dict if filter_dict else None,

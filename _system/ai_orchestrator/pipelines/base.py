@@ -95,8 +95,11 @@ class BasePipeline:
                 input_text=input_text,
                 project=self.project,
             )
-        except Exception:
-            pass  # Don't let memory logging failure break pipeline
+        except Exception as e:
+            # Log error but don't break pipeline
+            import sys
+
+            print(f"Warning: Memory logging failed: {e}", file=sys.stderr)
 
     def add_node(self, config: NodeConfig) -> "BasePipeline":
         """
