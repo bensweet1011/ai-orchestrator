@@ -292,8 +292,8 @@ with st.sidebar:
 # MAIN AREA - TABS
 # =============================================================================
 
-tab_chat, tab_pipelines, tab_autonomous, tab_memory, tab_integrations = st.tabs(
-    ["💬 Chat", "🔧 Pipelines", "🤖 Autonomous", "🧠 Memory", "🔗 Integrations"]
+tab_chat, tab_pipelines, tab_autonomous, tab_memory, tab_cost, tab_integrations = st.tabs(
+    ["💬 Chat", "🔧 Pipelines", "🤖 Autonomous", "🧠 Memory", "💰 Cost", "🔗 Integrations"]
 )
 
 # =============================================================================
@@ -1582,6 +1582,444 @@ with tab_memory:
 
         except Exception as e:
             st.error(f"Failed to load namespace stats: {e}")
+
+# =============================================================================
+# COST INTELLIGENCE TAB
+# =============================================================================
+
+with tab_cost:
+    st.header("Cost Intelligence")
+
+    from ai_orchestrator.cost import (
+        get_cost_analytics,
+        get_budget_manager,
+        get_cost_estimator,
+        get_cost_tracker,
+        get_pricing_manager,
+    )
+
+    cost_mode = st.radio(
+        "Mode:",
+        ["Dashboard", "Budget", "Estimates", "History", "Export"],
+        horizontal=True,
+    )
+
+    project = st.session_state.current_project
+
+    if cost_mode == "Dashboard":
+        st.subheader("Cost Dashboard")
+
+        try:
+            analytics = get_cost_analytics(project)
+            stats = analytics.get_summary_stats()
+
+            # Summary metrics
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                daily_change = stats.get("daily_change", 0)
+                delta_str = f"{daily_change:+.1%}" if daily_change else None
+                st.metric("Today's Spend", f"${stats.get('today_cost', 0):.4f}", delta=delta_str)
+            with col2:
+                st.metric("Week Spend", f"${stats.get('week_cost', 0):.4f}")
+            with col3:
+                st.metric("Month Spend", f"${stats.get('month_cost', 0):.4f}")
+            with col4:
+                st.metric("Total Tokens", f"{stats.get('today_tokens', 0):,}")
+
+            st.divider()
+
+            # Spend trend chart
+            try:
+                import plotly.express as px
+                import pandas as pd
+
+                trend_data = analytics.get_cost_trend(days=30)
+                if trend_data:
+                    df = pd.DataFrame(trend_data)
+                    fig = px.line(
+                        df,
+                        x="date",
+                        y="cost",
+                        title="Daily Spending (Last 30 Days)",
+                        labels={"date": "Date", "cost": "Cost (USD)"},
+                    )
+                    fig.update_layout(height=300)
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("No cost data available yet. Run some pipelines to see trends.")
+
+            except ImportError:
+                st.warning("Install plotly for charts: pip install plotly")
+
+            # Cost breakdown
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.subheader("Cost by Model")
+                model_costs = analytics.get_spend_by_model()
+                if model_costs:
+                    try:
+                        import plotly.express as px
+
+                        model_df = pd.DataFrame([
+                            {"model": k, "cost": v["cost"]}
+                            for k, v in model_costs.items()
+                        ])
+                        fig = px.pie(model_df, values="cost", names="model", title="Cost by Model")
+                        fig.update_layout(height=300)
+                        st.plotly_chart(fig, use_container_width=True)
+                    except ImportError:
+                        for model, data in model_costs.items():
+                            st.write(f"**{model}**: ${data['cost']:.4f} ({data['calls']} calls)")
+                else:
+                    st.info("No cost data by model yet")
+
+            with col2:
+                st.subheader("Cost by Pipeline")
+                pipeline_costs = analytics.get_spend_by_pipeline()
+                if pipeline_costs:
+                    try:
+                        import plotly.express as px
+
+                        pipeline_df = pd.DataFrame([
+                            {"pipeline": k, "cost": v["cost"]}
+                            for k, v in pipeline_costs.items()
+                        ])
+                        fig = px.bar(pipeline_df, x="pipeline", y="cost", title="Cost by Pipeline")
+                        fig.update_layout(height=300)
+                        st.plotly_chart(fig, use_container_width=True)
+                    except ImportError:
+                        for pipeline, data in pipeline_costs.items():
+                            st.write(f"**{pipeline}**: ${data['cost']:.4f} ({data['runs']} runs)")
+                else:
+                    st.info("No cost data by pipeline yet")
+
+        except Exception as e:
+            st.error(f"Failed to load cost dashboard: {e}")
+
+    elif cost_mode == "Budget":
+        st.subheader("Budget Management")
+
+        try:
+            budget_mgr = get_budget_manager(project)
+            config = budget_mgr.get_config()
+            status = budget_mgr.get_status()
+
+            # Budget configuration
+            st.write("**Set Budget Limits**")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                daily = st.number_input(
+                    "Daily Limit ($)",
+                    min_value=0.0,
+                    value=config.daily_limit if config and config.daily_limit else 0.0,
+                    step=1.0,
+                )
+            with col2:
+                weekly = st.number_input(
+                    "Weekly Limit ($)",
+                    min_value=0.0,
+                    value=config.weekly_limit if config and config.weekly_limit else 0.0,
+                    step=5.0,
+                )
+            with col3:
+                monthly = st.number_input(
+                    "Monthly Limit ($)",
+                    min_value=0.0,
+                    value=config.monthly_limit if config and config.monthly_limit else 0.0,
+                    step=10.0,
+                )
+
+            col1, col2 = st.columns(2)
+            with col1:
+                alerts_enabled = st.checkbox(
+                    "Enable Budget Alerts",
+                    value=config.alerts_enabled if config else True,
+                )
+            with col2:
+                enforce = st.checkbox(
+                    "Enforce Limits (block execution)",
+                    value=config.enforce_limits if config else False,
+                )
+
+            if st.button("Save Budget Settings", type="primary"):
+                budget_mgr.set_budget(
+                    daily=daily if daily > 0 else None,
+                    weekly=weekly if weekly > 0 else None,
+                    monthly=monthly if monthly > 0 else None,
+                    enforce=enforce,
+                    alerts_enabled=alerts_enabled,
+                )
+                st.success("Budget settings saved!")
+                st.rerun()
+
+            st.divider()
+
+            # Budget status
+            st.write("**Current Status**")
+
+            if status.daily_limit:
+                pct = status.daily_percentage or 0
+                st.progress(min(pct, 1.0), text=f"Daily: ${status.daily_usage:.4f} / ${status.daily_limit:.2f} ({pct:.1%})")
+
+            if status.weekly_limit:
+                pct = status.weekly_percentage or 0
+                st.progress(min(pct, 1.0), text=f"Weekly: ${status.weekly_usage:.4f} / ${status.weekly_limit:.2f} ({pct:.1%})")
+
+            if status.monthly_limit:
+                pct = status.monthly_percentage or 0
+                st.progress(min(pct, 1.0), text=f"Monthly: ${status.monthly_usage:.4f} / ${status.monthly_limit:.2f} ({pct:.1%})")
+
+            if status.projected_monthly_spend > 0:
+                st.info(f"Projected monthly spend: ${status.projected_monthly_spend:.2f}")
+
+            # Alerts
+            st.divider()
+            st.write("**Budget Alerts**")
+            alerts = budget_mgr.get_alerts(unacknowledged_only=True)
+            if alerts:
+                for alert in alerts:
+                    icon = {"info": "ℹ️", "warning": "⚠️", "critical": "🚨", "exceeded": "🛑"}.get(
+                        alert.alert_level.value, "•"
+                    )
+                    with st.expander(f"{icon} {alert.message}"):
+                        st.write(f"**Period:** {alert.period.value}")
+                        st.write(f"**Usage:** ${alert.current_usage:.4f} / ${alert.limit:.2f}")
+                        st.write(f"**Time:** {alert.timestamp[:16]}")
+                        if st.button("Acknowledge", key=f"ack_{alert.id}"):
+                            budget_mgr.acknowledge_alert(alert.id)
+                            st.rerun()
+            else:
+                st.success("No unacknowledged alerts")
+
+            if st.button("Clear All Alerts"):
+                budget_mgr.clear_alerts()
+                st.success("Alerts cleared")
+                st.rerun()
+
+        except Exception as e:
+            st.error(f"Failed to load budget: {e}")
+
+    elif cost_mode == "Estimates":
+        st.subheader("Cost Estimation")
+
+        try:
+            estimator = get_cost_estimator()
+            pricing_mgr = get_pricing_manager()
+
+            est_type = st.radio("Estimate:", ["Single LLM Call", "Pipeline"], horizontal=True)
+
+            if est_type == "Single LLM Call":
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    prompt = st.text_area("Prompt:", height=150, key="estimate_prompt")
+                with col2:
+                    model = st.selectbox("Model:", options=available, key="estimate_model")
+                    max_tokens = st.number_input("Max Tokens:", value=4096, step=256)
+
+                system = st.text_input("System Prompt (optional):")
+
+                if st.button("Estimate Cost", type="primary"):
+                    if prompt:
+                        estimate = estimator.estimate_llm_call(
+                            prompt=prompt,
+                            model=model,
+                            system_prompt=system if system else None,
+                            max_tokens=max_tokens,
+                        )
+
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Low Estimate", f"${estimate.estimated_cost_low:.6f}")
+                        with col2:
+                            st.metric("Likely Estimate", f"${estimate.estimated_cost_likely:.6f}")
+                        with col3:
+                            st.metric("High Estimate", f"${estimate.estimated_cost_high:.6f}")
+
+                        st.write(f"**Input Tokens:** {estimate.estimated_input_tokens:,}")
+                        st.write(f"**Output Tokens (likely):** {estimate.estimated_output_tokens_likely:,}")
+
+                        if estimate.warnings:
+                            for warning in estimate.warnings:
+                                st.warning(warning)
+                    else:
+                        st.warning("Enter a prompt to estimate")
+
+            else:  # Pipeline
+                pipelines = list_pipelines(project)
+                if pipelines:
+                    selected_pipeline = st.selectbox("Pipeline:", options=pipelines)
+                    input_text = st.text_area("Input Text:", height=150, key="pipeline_estimate_input")
+
+                    if st.button("Estimate Pipeline Cost", type="primary"):
+                        if input_text:
+                            pipeline = get_pipeline(selected_pipeline, project)
+                            estimate = estimator.estimate_pipeline(pipeline, input_text)
+
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("Low Estimate", f"${estimate.estimated_cost_low:.6f}")
+                            with col2:
+                                st.metric("Likely Estimate", f"${estimate.estimated_cost_likely:.6f}")
+                            with col3:
+                                st.metric("High Estimate", f"${estimate.estimated_cost_high:.6f}")
+
+                            st.divider()
+                            st.write("**Cost by Node:**")
+                            for node_est in estimate.node_estimates:
+                                with st.expander(f"**{node_est.node_name}** ({node_est.model})"):
+                                    st.write(f"Input Tokens: {node_est.input_tokens:,}")
+                                    st.write(f"Output Tokens (likely): {node_est.output_tokens_likely:,}")
+                                    st.write(f"Cost (likely): ${node_est.cost_likely:.6f}")
+
+                            if estimate.warnings:
+                                for warning in estimate.warnings:
+                                    st.warning(warning)
+                        else:
+                            st.warning("Enter input text to estimate")
+                else:
+                    st.info("No pipelines created yet")
+
+            # Show pricing table
+            st.divider()
+            st.write("**Current Pricing (per 1K tokens)**")
+            all_pricing = pricing_mgr.get_all_pricing()
+            pricing_data = []
+            for model_id, pricing in all_pricing.items():
+                pricing_data.append({
+                    "Model": model_id,
+                    "Provider": pricing.provider,
+                    "Input": f"${pricing.input_cost_per_1k:.4f}",
+                    "Output": f"${pricing.output_cost_per_1k:.4f}",
+                })
+            if pricing_data:
+                st.dataframe(pricing_data, use_container_width=True, hide_index=True)
+
+        except Exception as e:
+            st.error(f"Failed to load estimator: {e}")
+
+    elif cost_mode == "History":
+        st.subheader("Cost History")
+
+        try:
+            tracker = get_cost_tracker(project)
+
+            col1, col2 = st.columns(2)
+            with col1:
+                limit = st.slider("Records to show:", 10, 200, 50)
+            with col2:
+                pipelines = list_pipelines(project)
+                filter_pipeline = st.selectbox(
+                    "Filter by Pipeline:",
+                    options=["All"] + pipelines,
+                )
+
+            records = tracker.get_recent_records(
+                limit=limit,
+                pipeline_name=filter_pipeline if filter_pipeline != "All" else None,
+            )
+
+            if records:
+                st.write(f"**Showing {len(records)} records**")
+
+                for record in records:
+                    status = "✅" if record.success else "❌"
+                    with st.expander(
+                        f"{status} **{record.pipeline_name or 'Single Call'}** - "
+                        f"${record.total_cost:.6f} - {record.timestamp[:16]}"
+                    ):
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.write(f"**Cost:** ${record.total_cost:.6f}")
+                            if record.estimated_cost:
+                                st.write(f"**Estimated:** ${record.estimated_cost:.6f}")
+                                variance = record.estimate_variance or 0
+                                st.write(f"**Variance:** {variance:+.1%}")
+                        with col2:
+                            st.write(f"**Input Tokens:** {record.total_input_tokens:,}")
+                            st.write(f"**Output Tokens:** {record.total_output_tokens:,}")
+                        with col3:
+                            st.write(f"**Latency:** {record.latency_ms:,}ms")
+                            st.write(f"**Models:** {', '.join(record.models_used)}")
+
+                        if record.node_costs:
+                            st.write("**Node Breakdown:**")
+                            for node in record.node_costs:
+                                st.write(
+                                    f"- {node.node_name} ({node.model}): "
+                                    f"${node.cost:.6f} ({node.input_tokens}+{node.output_tokens} tokens)"
+                                )
+            else:
+                st.info("No cost records yet. Run some pipelines to see history.")
+
+        except Exception as e:
+            st.error(f"Failed to load cost history: {e}")
+
+    elif cost_mode == "Export":
+        st.subheader("Export Cost Data")
+
+        try:
+            from datetime import datetime, timedelta
+
+            analytics = get_cost_analytics(project)
+
+            col1, col2 = st.columns(2)
+            with col1:
+                start_date = st.date_input(
+                    "Start Date",
+                    value=datetime.now() - timedelta(days=30),
+                )
+            with col2:
+                end_date = st.date_input("End Date", value=datetime.now())
+
+            if st.button("Export to CSV", type="primary"):
+                try:
+                    csv_path = analytics.export_csv(
+                        start_date=start_date.isoformat(),
+                        end_date=end_date.isoformat(),
+                    )
+
+                    with open(csv_path, "r") as f:
+                        csv_content = f.read()
+
+                    st.download_button(
+                        label="Download CSV",
+                        data=csv_content,
+                        file_name=f"cost_export_{start_date}_{end_date}.csv",
+                        mime="text/csv",
+                    )
+                    st.success(f"Export ready! {csv_path}")
+                except Exception as e:
+                    st.error(f"Export failed: {e}")
+
+            st.divider()
+
+            # Estimation accuracy
+            st.write("**Estimation Accuracy**")
+            accuracy = analytics.get_estimation_accuracy(
+                start_date=start_date.isoformat(),
+                end_date=end_date.isoformat(),
+            )
+
+            if accuracy.get("records_with_estimates", 0) > 0:
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Accuracy Rate", f"{accuracy.get('accuracy_rate', 0):.1%}")
+                with col2:
+                    st.metric("Avg Variance", f"{accuracy.get('avg_variance', 0):+.1%}")
+                with col3:
+                    st.metric("Total Records", accuracy.get("total_records", 0))
+
+                st.write(
+                    f"- Within 20% estimate: {accuracy.get('accurate', 0)}\n"
+                    f"- Over-estimated: {accuracy.get('over_estimated', 0)}\n"
+                    f"- Under-estimated: {accuracy.get('under_estimated', 0)}"
+                )
+            else:
+                st.info("No records with cost estimates in selected range")
+
+        except Exception as e:
+            st.error(f"Failed to load export: {e}")
 
 # =============================================================================
 # INTEGRATIONS TAB

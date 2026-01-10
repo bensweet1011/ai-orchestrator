@@ -83,13 +83,13 @@ class BasePipeline:
         unique = hashlib.md5(f"{self.name}{ts}".encode()).hexdigest()[:8]
         return f"pipeline_{unique}"
 
-    def _log_to_memory(self, result: PipelineResult, input_text: str):
-        """Log pipeline result to memory store."""
+    def _log_to_memory(self, result: PipelineResult, input_text: str) -> str:
+        """Log pipeline result to memory store. Returns memory_id."""
         try:
             from ..memory import get_memory_store
 
             store = get_memory_store()
-            store.log_pipeline_run(
+            return store.log_pipeline_run(
                 result=result,
                 pipeline_name=self.name,
                 input_text=input_text,
@@ -100,6 +100,49 @@ class BasePipeline:
             import sys
 
             print(f"Warning: Memory logging failed: {e}", file=sys.stderr)
+            return ""
+
+    def _estimate_cost(self, input_text: str):
+        """Estimate cost before pipeline execution."""
+        try:
+            from ..cost import get_cost_estimator
+
+            estimator = get_cost_estimator()
+            return estimator.estimate_pipeline(self, input_text)
+        except Exception as e:
+            import sys
+
+            print(f"Warning: Cost estimation failed: {e}", file=sys.stderr)
+            return None
+
+    def _track_cost(self, result: PipelineResult, pre_estimate, memory_id: str = None):
+        """Track cost after pipeline execution."""
+        try:
+            from ..cost import get_cost_tracker
+
+            tracker = get_cost_tracker(self.project or "default")
+            cost_record = tracker.track_pipeline_run(
+                result=result,
+                pipeline_name=self.name,
+                pre_estimate=pre_estimate,
+                memory_id=memory_id,
+            )
+            return cost_record
+        except Exception as e:
+            import sys
+
+            print(f"Warning: Cost tracking failed: {e}", file=sys.stderr)
+            return None
+
+    def _check_budget(self, estimated_cost: float) -> tuple:
+        """Check if budget allows execution. Returns (allowed, warning_msg)."""
+        try:
+            from ..cost import get_budget_manager
+
+            budget_mgr = get_budget_manager(self.project or "default")
+            return budget_mgr.check_budget(estimated_cost)
+        except Exception:
+            return True, None
 
     def add_node(self, config: NodeConfig) -> "BasePipeline":
         """
@@ -236,6 +279,7 @@ class BasePipeline:
         input_text: str,
         config: Optional[Dict] = None,
         log_to_memory: Optional[bool] = None,
+        track_cost: bool = True,
     ) -> PipelineResult:
         """
         Execute the pipeline on input text.
@@ -244,12 +288,18 @@ class BasePipeline:
             input_text: User input to process
             config: Optional LangGraph config
             log_to_memory: Override memory logging (uses pipeline default if None)
+            track_cost: Whether to track cost (default True)
 
         Returns:
             PipelineResult with outputs from all nodes
         """
         if not self._compiled:
             self.compile()
+
+        # Pre-run cost estimation
+        cost_estimate = None
+        if track_cost:
+            cost_estimate = self._estimate_cost(input_text)
 
         # Create initial state with project context
         state = create_initial_state(input_text, self.pipeline_id)
@@ -285,14 +335,23 @@ class BasePipeline:
                 pipeline_id=self.pipeline_id,
                 started_at=final_state.get("started_at", ""),
                 completed_at=datetime.utcnow().isoformat(),
+                cost_estimate=cost_estimate.to_dict() if cost_estimate else None,
             )
 
             # Log to memory if enabled
             should_log = (
                 log_to_memory if log_to_memory is not None else self.log_to_memory
             )
+            memory_id = ""
             if should_log and result.success:
-                self._log_to_memory(result, input_text)
+                memory_id = self._log_to_memory(result, input_text)
+
+            # Post-run cost tracking
+            if track_cost and result.success:
+                cost_record = self._track_cost(result, cost_estimate, memory_id)
+                if cost_record:
+                    result.total_cost = cost_record.total_cost
+                    result.cost_record_id = cost_record.id
 
             return result
 

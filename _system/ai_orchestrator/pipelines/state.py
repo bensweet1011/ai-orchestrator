@@ -116,6 +116,11 @@ class PipelineResult:
     started_at: str
     completed_at: str
 
+    # Cost Intelligence fields
+    total_cost: Optional[float] = None
+    cost_record_id: Optional[str] = None
+    cost_estimate: Optional[Dict[str, Any]] = None
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
@@ -128,4 +133,7 @@ class PipelineResult:
             "pipeline_id": self.pipeline_id,
             "started_at": self.started_at,
             "completed_at": self.completed_at,
+            "total_cost": self.total_cost,
+            "cost_record_id": self.cost_record_id,
+            "cost_estimate": self.cost_estimate,
         }
