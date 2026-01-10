@@ -47,6 +47,7 @@ class AutonomousExecutor:
         auto_debug: bool = True,
         debug_model: str = "claude",
         escalation_callback: Optional[Callable[[Escalation], None]] = None,
+        log_to_memory: bool = True,
     ):
         """
         Initialize autonomous executor.
@@ -58,11 +59,13 @@ class AutonomousExecutor:
             auto_debug: Whether to use LLM-powered debugging
             debug_model: LLM to use for debug analysis
             escalation_callback: Optional callback for escalation notifications
+            log_to_memory: Whether to log results to memory store
         """
         self.pipeline = pipeline
         self.max_retries = max_retries
         self.checkpoint_nodes = checkpoint_nodes or []
         self.auto_debug = auto_debug
+        self.log_to_memory = log_to_memory
 
         # Initialize components
         self.error_handler = ErrorHandler(max_retries=max_retries)
@@ -106,6 +109,9 @@ class AutonomousExecutor:
 
         if custom_state:
             state["custom"].update(custom_state)
+
+        # Store input text for memory logging
+        state["custom"]["_input_text"] = input_text
 
         # Log execution start
         self._add_trace(
@@ -213,7 +219,7 @@ class AutonomousExecutor:
             },
         )
 
-        return ExecutionResult(
+        result = ExecutionResult(
             success=len(state.get("errors", [])) == 0
             and not state.get("escalation_triggered"),
             final_output=state.get("final_output", ""),
@@ -230,6 +236,12 @@ class AutonomousExecutor:
             completed_at=datetime.utcnow().isoformat(),
             trace_log=state.get("trace_log", []),
         )
+
+        # Log to memory if enabled
+        if self.log_to_memory:
+            self._log_to_memory(result, input_text, state)
+
+        return result
 
     def _execute_node_with_retry(
         self,
@@ -529,6 +541,40 @@ class AutonomousExecutor:
             }
         )
         state["trace_log"] = trace_log
+
+    def _log_to_memory(
+        self,
+        result: ExecutionResult,
+        input_text: str,
+        state: ExecutionState,
+    ):
+        """Log execution result to memory store."""
+        try:
+            from ..memory import get_memory_store
+            from ..pipelines.state import PipelineResult
+
+            # Convert ExecutionResult to PipelineResult for memory store
+            pipeline_result = PipelineResult(
+                success=result.success,
+                final_output=result.final_output,
+                node_outputs=result.node_outputs,
+                total_latency_ms=result.total_latency_ms,
+                total_tokens=result.total_tokens,
+                errors=result.errors,
+                pipeline_id=result.pipeline_id,
+                started_at=result.started_at,
+                completed_at=result.completed_at,
+            )
+
+            store = get_memory_store()
+            store.log_pipeline_run(
+                result=pipeline_result,
+                pipeline_name=self.pipeline.name,
+                input_text=input_text,
+                project=state.get("custom", {}).get("project"),
+            )
+        except Exception:
+            pass  # Don't let memory logging failure break execution
 
     def resume(
         self,

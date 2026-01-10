@@ -49,7 +49,13 @@ class BasePipeline:
         result = pipeline.run("Long text to process...")
     """
 
-    def __init__(self, name: str, description: str = ""):
+    def __init__(
+        self,
+        name: str,
+        description: str = "",
+        log_to_memory: bool = True,
+        project: Optional[str] = None,
+    ):
         self.name = name
         self.description = description
         self.pipeline_id = self._generate_id()
@@ -67,11 +73,30 @@ class BasePipeline:
         self._graph: Optional[StateGraph] = None
         self._compiled = False
 
+        # Memory integration
+        self.log_to_memory = log_to_memory
+        self.project = project
+
     def _generate_id(self) -> str:
         """Generate unique pipeline ID."""
         ts = datetime.utcnow().isoformat()
         unique = hashlib.md5(f"{self.name}{ts}".encode()).hexdigest()[:8]
         return f"pipeline_{unique}"
+
+    def _log_to_memory(self, result: PipelineResult, input_text: str):
+        """Log pipeline result to memory store."""
+        try:
+            from ..memory import get_memory_store
+
+            store = get_memory_store()
+            store.log_pipeline_run(
+                result=result,
+                pipeline_name=self.name,
+                input_text=input_text,
+                project=self.project,
+            )
+        except Exception:
+            pass  # Don't let memory logging failure break pipeline
 
     def add_node(self, config: NodeConfig) -> "BasePipeline":
         """
@@ -203,13 +228,19 @@ class BasePipeline:
         self._compiled = True
         return self
 
-    def run(self, input_text: str, config: Optional[Dict] = None) -> PipelineResult:
+    def run(
+        self,
+        input_text: str,
+        config: Optional[Dict] = None,
+        log_to_memory: Optional[bool] = None,
+    ) -> PipelineResult:
         """
         Execute the pipeline on input text.
 
         Args:
             input_text: User input to process
             config: Optional LangGraph config
+            log_to_memory: Override memory logging (uses pipeline default if None)
 
         Returns:
             PipelineResult with outputs from all nodes
@@ -217,8 +248,10 @@ class BasePipeline:
         if not self._compiled:
             self.compile()
 
-        # Create initial state
+        # Create initial state with project context
         state = create_initial_state(input_text, self.pipeline_id)
+        if self.project:
+            state["custom"]["project"] = self.project
 
         # Compile and run
         app = self._graph.compile()
@@ -232,10 +265,14 @@ class BasePipeline:
             total_tokens = {"input_tokens": 0, "output_tokens": 0}
             for output in final_state.get("outputs", {}).values():
                 if output.get("tokens_used"):
-                    total_tokens["input_tokens"] += output["tokens_used"].get("input_tokens", 0)
-                    total_tokens["output_tokens"] += output["tokens_used"].get("output_tokens", 0)
+                    total_tokens["input_tokens"] += output["tokens_used"].get(
+                        "input_tokens", 0
+                    )
+                    total_tokens["output_tokens"] += output["tokens_used"].get(
+                        "output_tokens", 0
+                    )
 
-            return PipelineResult(
+            result = PipelineResult(
                 success=len(final_state.get("errors", [])) == 0,
                 final_output=final_state.get("final_output", ""),
                 node_outputs=final_state.get("outputs", {}),
@@ -246,6 +283,15 @@ class BasePipeline:
                 started_at=final_state.get("started_at", ""),
                 completed_at=datetime.utcnow().isoformat(),
             )
+
+            # Log to memory if enabled
+            should_log = (
+                log_to_memory if log_to_memory is not None else self.log_to_memory
+            )
+            if should_log and result.success:
+                self._log_to_memory(result, input_text)
+
+            return result
 
         except Exception as e:
             total_latency = int((time.time() - start_time) * 1000)
@@ -267,7 +313,9 @@ class BasePipeline:
                 completed_at=datetime.utcnow().isoformat(),
             )
 
-    async def arun(self, input_text: str, config: Optional[Dict] = None) -> PipelineResult:
+    async def arun(
+        self, input_text: str, config: Optional[Dict] = None
+    ) -> PipelineResult:
         """Async version of run."""
         if not self._compiled:
             self.compile()
@@ -283,8 +331,12 @@ class BasePipeline:
             total_tokens = {"input_tokens": 0, "output_tokens": 0}
             for output in final_state.get("outputs", {}).values():
                 if output.get("tokens_used"):
-                    total_tokens["input_tokens"] += output["tokens_used"].get("input_tokens", 0)
-                    total_tokens["output_tokens"] += output["tokens_used"].get("output_tokens", 0)
+                    total_tokens["input_tokens"] += output["tokens_used"].get(
+                        "input_tokens", 0
+                    )
+                    total_tokens["output_tokens"] += output["tokens_used"].get(
+                        "output_tokens", 0
+                    )
 
             return PipelineResult(
                 success=len(final_state.get("errors", [])) == 0,
@@ -344,6 +396,8 @@ class BasePipeline:
         return {
             "name": self.name,
             "description": self.description,
+            "log_to_memory": self.log_to_memory,
+            "project": self.project,
             "nodes": {name: config.to_dict() for name, config in self.nodes.items()},
             "edges": [{"from": e.from_node, "to": e.to_node} for e in self.edges],
             "conditional_edges": [
@@ -373,7 +427,12 @@ class BasePipeline:
         Returns:
             BasePipeline instance
         """
-        pipeline = cls(name=data["name"], description=data.get("description", ""))
+        pipeline = cls(
+            name=data["name"],
+            description=data.get("description", ""),
+            log_to_memory=data.get("log_to_memory", True),
+            project=data.get("project"),
+        )
 
         # Add nodes
         for name, node_data in data.get("nodes", {}).items():

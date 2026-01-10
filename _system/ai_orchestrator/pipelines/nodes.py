@@ -49,6 +49,11 @@ class NodeConfig:
     # For transform nodes
     transform_fn: Optional[Callable[[PipelineState], str]] = None
 
+    # Memory integration
+    use_memory: bool = False  # Whether to inject context from memory
+    memory_context_k: int = 3  # Number of past results to inject
+    memory_min_score: float = 0.5  # Minimum similarity score for context
+
     # Metadata
     description: str = ""
 
@@ -57,13 +62,19 @@ class NodeConfig:
             self.output_key = self.name
 
         if self.node_type == NodeType.LLM and self.llm is None:
-            raise ValueError(f"Node '{self.name}': LLM nodes require 'llm' to be specified")
+            raise ValueError(
+                f"Node '{self.name}': LLM nodes require 'llm' to be specified"
+            )
 
         if self.node_type == NodeType.CONDITIONAL and self.condition_fn is None:
-            raise ValueError(f"Node '{self.name}': Conditional nodes require 'condition_fn'")
+            raise ValueError(
+                f"Node '{self.name}': Conditional nodes require 'condition_fn'"
+            )
 
         if self.node_type == NodeType.TRANSFORM and self.transform_fn is None:
-            raise ValueError(f"Node '{self.name}': Transform nodes require 'transform_fn'")
+            raise ValueError(
+                f"Node '{self.name}': Transform nodes require 'transform_fn'"
+            )
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary (excludes functions)."""
@@ -78,6 +89,9 @@ class NodeConfig:
             "output_key": self.output_key,
             "input_template": self.input_template,
             "routes": self.routes,
+            "use_memory": self.use_memory,
+            "memory_context_k": self.memory_context_k,
+            "memory_min_score": self.memory_min_score,
             "description": self.description,
         }
 
@@ -116,11 +130,39 @@ def create_llm_node(config: NodeConfig) -> Callable[[PipelineState], PipelineSta
         else:
             input_text = state.get("custom", {}).get(config.input_key, state["input"])
 
+        # Inject memory context if enabled
+        context_sources = []
+        if config.use_memory:
+            try:
+                from ..memory import get_context_injector, ContextConfig
+
+                injector = get_context_injector()
+                context_config = ContextConfig(
+                    enabled=True,
+                    max_results=config.memory_context_k,
+                    min_score=config.memory_min_score,
+                )
+                injection = injector.inject_for_input(
+                    input_text=input_text,
+                    project=state.get("custom", {}).get("project"),
+                    node_name=config.name,
+                    config=context_config,
+                )
+                if injection.context_added:
+                    input_text = injection.enhanced_input
+                    context_sources = [
+                        {"id": s["id"], "score": s["score"]} for s in injection.sources
+                    ]
+            except Exception:
+                pass  # Continue without memory if it fails
+
         # Apply template if provided
         if config.input_template:
             prompt = config.input_template.format(
                 input=input_text,
-                **{k: v.get("content", "") for k, v in state.get("outputs", {}).items()},
+                **{
+                    k: v.get("content", "") for k, v in state.get("outputs", {}).items()
+                },
             )
         else:
             prompt = input_text
@@ -150,11 +192,17 @@ def create_llm_node(config: NodeConfig) -> Callable[[PipelineState], PipelineSta
             outputs = dict(state.get("outputs", {}))
             outputs[config.output_key] = output
 
+            # Include memory context sources if used
+            custom = dict(state.get("custom", {}))
+            if context_sources:
+                custom["memory_context_sources"] = context_sources
+
             return {
                 **state,
                 "outputs": outputs,
                 "current_node": config.name,
                 "final_output": response.content,
+                "custom": custom,
             }
 
         except Exception as e:
@@ -218,7 +266,9 @@ def create_conditional_node(
     return node_fn
 
 
-def create_transform_node(config: NodeConfig) -> Callable[[PipelineState], PipelineState]:
+def create_transform_node(
+    config: NodeConfig,
+) -> Callable[[PipelineState], PipelineState]:
     """
     Create a pure Python transformation node.
 

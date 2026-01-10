@@ -38,6 +38,11 @@ from ai_orchestrator.execution import (
     CheckpointManager,
     EscalationManager,
 )
+from ai_orchestrator.memory import (
+    SynthesisType,
+    get_memory_store,
+    get_synthesizer,
+)
 
 # Page config
 st.set_page_config(
@@ -281,8 +286,8 @@ with st.sidebar:
 # MAIN AREA - TABS
 # =============================================================================
 
-tab_chat, tab_pipelines, tab_autonomous = st.tabs(
-    ["💬 Chat", "🔧 Pipelines", "🤖 Autonomous"]
+tab_chat, tab_pipelines, tab_autonomous, tab_memory = st.tabs(
+    ["💬 Chat", "🔧 Pipelines", "🤖 Autonomous", "🧠 Memory"]
 )
 
 # =============================================================================
@@ -1247,3 +1252,327 @@ with tab_autonomous:
                                     )
                                     st.warning("Checkpoint rejected")
                                     st.rerun()
+
+
+# =============================================================================
+# MEMORY TAB
+# =============================================================================
+
+with tab_memory:
+    st.header("Cross-Session Memory")
+    st.caption("Search, browse, and synthesize outputs across pipeline runs")
+
+    memory_subtab = st.radio(
+        "Mode:",
+        ["Search Memory", "Pipeline History", "Synthesis", "Namespace Stats"],
+        horizontal=True,
+        key="memory_subtab",
+    )
+
+    st.divider()
+
+    # -------------------------------------------------------------------------
+    # SEARCH MEMORY
+    # -------------------------------------------------------------------------
+    if memory_subtab == "Search Memory":
+        st.subheader("Semantic Search")
+
+        search_query = st.text_input(
+            "Search query:",
+            placeholder="Enter a query to search past outputs...",
+            key="memory_search_query",
+        )
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            search_limit = st.number_input(
+                "Max results:",
+                min_value=1,
+                max_value=50,
+                value=10,
+                key="memory_search_limit",
+            )
+        with col2:
+            min_score = st.slider(
+                "Min similarity:",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.3,
+                key="memory_min_score",
+            )
+        with col3:
+            success_only = st.checkbox(
+                "Successful runs only", value=True, key="memory_success_only"
+            )
+
+        if st.button("Search", type="primary", key="memory_search_btn"):
+            if search_query:
+                try:
+                    store = get_memory_store()
+                    store.set_project(st.session_state.current_project)
+
+                    results = store.search_pipeline_outputs(
+                        query=search_query,
+                        project=st.session_state.current_project,
+                        success_only=success_only,
+                        limit=search_limit,
+                        min_score=min_score,
+                    )
+
+                    if results:
+                        st.success(f"Found {len(results)} results")
+
+                        for i, result in enumerate(results, 1):
+                            meta = result["metadata"]
+                            with st.expander(
+                                f"**{i}. {meta.get('pipeline_name', 'Unknown')}** "
+                                f"(score: {result['score']:.2f})"
+                            ):
+                                st.write(f"**Date:** {result['timestamp'][:10]}")
+                                st.write(
+                                    f"**Pipeline:** {meta.get('pipeline_name', 'N/A')}"
+                                )
+                                st.write(
+                                    f"**Latency:** {meta.get('latency_ms', 'N/A')}ms"
+                                )
+
+                                if meta.get("input_preview"):
+                                    st.write("**Input:**")
+                                    st.caption(meta["input_preview"][:300])
+
+                                st.write("**Output:**")
+                                st.markdown(result["content_preview"])
+
+                                if meta.get("nodes"):
+                                    st.write(f"**Nodes:** {meta['nodes']}")
+                    else:
+                        st.info("No matching results found")
+
+                except Exception as e:
+                    st.error(f"Search failed: {e}")
+            else:
+                st.warning("Please enter a search query")
+
+    # -------------------------------------------------------------------------
+    # PIPELINE HISTORY
+    # -------------------------------------------------------------------------
+    elif memory_subtab == "Pipeline History":
+        st.subheader("Pipeline Run History")
+
+        # Get pipelines for filtering
+        saved = list_pipelines()
+        pipeline_names = ["All"] + [p["name"] for p in saved]
+
+        col1, col2 = st.columns(2)
+        with col1:
+            filter_pipeline = st.selectbox(
+                "Filter by pipeline:",
+                options=pipeline_names,
+                key="memory_history_pipeline",
+            )
+        with col2:
+            history_limit = st.number_input(
+                "Max results:",
+                min_value=5,
+                max_value=100,
+                value=20,
+                key="memory_history_limit",
+            )
+
+        try:
+            store = get_memory_store()
+            store.set_project(st.session_state.current_project)
+
+            pipeline_filter = None if filter_pipeline == "All" else filter_pipeline
+            runs = store.get_pipeline_history(
+                pipeline_name=pipeline_filter,
+                project=st.session_state.current_project,
+                limit=history_limit,
+            )
+
+            if runs:
+                st.write(f"**Showing {len(runs)} runs**")
+
+                for run in runs:
+                    status = "✅" if run.success else "❌"
+                    with st.expander(
+                        f"{status} **{run.pipeline_name}** - {run.timestamp[:16]} ({run.total_latency_ms}ms)"
+                    ):
+                        st.write(f"**Run ID:** {run.id}")
+                        st.write(f"**Session:** {run.session_id[:16]}...")
+
+                        st.write("**Input:**")
+                        st.caption(run.input_text[:500])
+
+                        st.write("**Output:**")
+                        st.markdown(run.final_output[:1000])
+
+                        st.write(
+                            f"**Tokens:** {run.total_tokens.get('input_tokens', 0)} in, "
+                            f"{run.total_tokens.get('output_tokens', 0)} out"
+                        )
+
+                        if run.node_outputs:
+                            st.write("**Node Outputs:**")
+                            for node_name, output in run.node_outputs.items():
+                                st.caption(
+                                    f"  • {node_name}: {output.get('content', '')[:100]}..."
+                                )
+
+                        if run.errors:
+                            st.error(f"Errors: {len(run.errors)}")
+            else:
+                st.info("No pipeline runs found for this project")
+
+        except Exception as e:
+            st.error(f"Failed to load history: {e}")
+
+    # -------------------------------------------------------------------------
+    # SYNTHESIS
+    # -------------------------------------------------------------------------
+    elif memory_subtab == "Synthesis":
+        st.subheader("Multi-Run Synthesis")
+        st.caption("Combine, compare, or extract patterns from multiple pipeline runs")
+
+        try:
+            store = get_memory_store()
+            store.set_project(st.session_state.current_project)
+
+            # Get recent runs for selection
+            runs = store.get_pipeline_history(
+                project=st.session_state.current_project,
+                limit=30,
+                success_only=True,
+            )
+
+            if runs:
+                # Create selection options
+                run_options = {
+                    f"{r.pipeline_name} - {r.timestamp[:16]} ({r.id})": r.id
+                    for r in runs
+                }
+
+                selected_runs = st.multiselect(
+                    "Select runs to synthesize:",
+                    options=list(run_options.keys()),
+                    key="synthesis_runs",
+                )
+
+                synthesis_type = st.selectbox(
+                    "Synthesis type:",
+                    options=["combine", "compare", "patterns", "best_of", "timeline"],
+                    format_func=lambda x: {
+                        "combine": "Combine - Merge outputs into unified result",
+                        "compare": "Compare - Analyze differences and similarities",
+                        "patterns": "Patterns - Extract common themes",
+                        "best_of": "Best Of - Select and enhance best output",
+                        "timeline": "Timeline - Chronological summary",
+                    }[x],
+                    key="synthesis_type",
+                )
+
+                custom_instructions = st.text_area(
+                    "Custom instructions (optional):",
+                    placeholder="Add specific instructions for the synthesis...",
+                    key="synthesis_instructions",
+                )
+
+                if st.button("Synthesize", type="primary", key="synthesis_btn"):
+                    if len(selected_runs) >= 2:
+                        run_ids = [run_options[r] for r in selected_runs]
+
+                        with st.spinner("Synthesizing outputs..."):
+                            synthesizer = get_synthesizer()
+                            result = synthesizer.synthesize(
+                                run_ids=run_ids,
+                                synthesis_type=SynthesisType(synthesis_type),
+                                instructions=(
+                                    custom_instructions if custom_instructions else None
+                                ),
+                                project=st.session_state.current_project,
+                            )
+
+                        st.success(f"Synthesis complete ({result.latency_ms}ms)")
+
+                        st.subheader("Synthesized Output")
+                        st.markdown(result.synthesized_output)
+
+                        st.caption(
+                            f"Model: {result.model_used} | "
+                            f"Sources: {result.source_count} | "
+                            f"Tokens: {result.token_usage.get('input_tokens', 0)} in, "
+                            f"{result.token_usage.get('output_tokens', 0)} out"
+                        )
+                    else:
+                        st.warning("Please select at least 2 runs to synthesize")
+
+                # Quick patterns button
+                st.divider()
+                st.write("**Quick Actions:**")
+                if st.button("Extract Patterns from Recent Runs", key="quick_patterns"):
+                    with st.spinner("Analyzing patterns..."):
+                        synthesizer = get_synthesizer()
+                        result = synthesizer.extract_patterns(
+                            project=st.session_state.current_project,
+                            limit=10,
+                        )
+                    st.subheader("Pattern Analysis")
+                    st.markdown(result.synthesized_output)
+
+            else:
+                st.info("No successful pipeline runs found to synthesize")
+
+        except Exception as e:
+            st.error(f"Synthesis error: {e}")
+
+    # -------------------------------------------------------------------------
+    # NAMESPACE STATS
+    # -------------------------------------------------------------------------
+    else:
+        st.subheader("Memory Namespace Statistics")
+
+        try:
+            store = get_memory_store()
+
+            # Current project stats
+            stats = store.get_namespace_stats(st.session_state.current_project)
+
+            st.write(f"**Current Project:** {st.session_state.current_project}")
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Namespace", stats.get("namespace", "N/A")[:16])
+            with col2:
+                st.metric("Vectors", stats.get("vector_count", 0))
+            with col3:
+                st.metric("Local Records", stats.get("local_records", 0))
+
+            if stats.get("error"):
+                st.warning(f"Stats error: {stats['error']}")
+
+            st.divider()
+
+            # List all namespaces
+            st.write("**All Project Namespaces:**")
+            namespaces = store.list_namespaces()
+
+            if namespaces:
+                for ns in namespaces:
+                    with st.expander(f"**{ns.project}** ({ns.full_namespace})"):
+                        st.write(f"Created: {ns.created_at[:10]}")
+
+                        ns_stats = store.get_namespace_stats(ns.project)
+                        st.write(f"Vectors: {ns_stats.get('vector_count', 0)}")
+                        st.write(f"Local Records: {ns_stats.get('local_records', 0)}")
+
+                        if st.button("Clear Memory", key=f"clear_{ns.project}"):
+                            if store.clear_namespace(ns.project):
+                                st.success(f"Cleared memory for {ns.project}")
+                                st.rerun()
+                            else:
+                                st.error("Failed to clear namespace")
+            else:
+                st.info("No namespaces created yet")
+
+        except Exception as e:
+            st.error(f"Failed to load namespace stats: {e}")
