@@ -32,10 +32,19 @@ from ai_orchestrator.pipelines import (
     get_pipeline_templates,
     create_from_template,
 )
+from ai_orchestrator.execution import (
+    AutonomousExecutor,
+    ExecutionMode,
+    CheckpointManager,
+    EscalationManager,
+)
 
 # Page config
 st.set_page_config(
-    page_title="AI Orchestrator", page_icon="🎯", layout="wide", initial_sidebar_state="expanded"
+    page_title="AI Orchestrator",
+    page_icon="🎯",
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
 # Initialize session state
@@ -57,6 +66,8 @@ if "pipeline_config" not in st.session_state:
     st.session_state.pipeline_config = {}
 if "pipeline_results" not in st.session_state:
     st.session_state.pipeline_results = None
+if "autonomous_result" not in st.session_state:
+    st.session_state.autonomous_result = None
 
 
 def check_setup() -> tuple[bool, List[str]]:
@@ -69,12 +80,16 @@ def check_setup() -> tuple[bool, List[str]]:
     if not keys["openai"]:
         issues.append("OPENAI_API_KEY not set (required for embeddings)")
     if not keys["any_llm"]:
-        issues.append("No LLM API keys set (need at least one of: ANTHROPIC, OPENAI, GOOGLE)")
+        issues.append(
+            "No LLM API keys set (need at least one of: ANTHROPIC, OPENAI, GOOGLE)"
+        )
 
     return len(issues) == 0, issues
 
 
-def call_single_model(prompt: str, model: str, system: str = None) -> tuple[str, LLMResponse, int]:
+def call_single_model(
+    prompt: str, model: str, system: str = None
+) -> tuple[str, LLMResponse, int]:
     """Call a single model and return (model_name, response, latency_ms)."""
     clients = get_clients()
     start = time.time()
@@ -91,7 +106,8 @@ def call_models_parallel(
 
     with ThreadPoolExecutor(max_workers=len(models)) as executor:
         futures = {
-            executor.submit(call_single_model, prompt, model, system): model for model in models
+            executor.submit(call_single_model, prompt, model, system): model
+            for model in models
         }
         for future in futures:
             model = futures[future]
@@ -117,9 +133,7 @@ def call_models_sequential(
             results[model] = (response, latency)
 
             if pass_output and response:
-                current_prompt = (
-                    f"Previous output:\n{response.content}\n\nBased on the above, {prompt}"
-                )
+                current_prompt = f"Previous output:\n{response.content}\n\nBased on the above, {prompt}"
         except Exception as e:
             results[model] = (None, str(e))
             if pass_output:
@@ -128,7 +142,9 @@ def call_models_sequential(
     return results
 
 
-def synthesize_outputs(outputs: Dict[str, tuple[LLMResponse, int]], original_prompt: str) -> str:
+def synthesize_outputs(
+    outputs: Dict[str, tuple[LLMResponse, int]], original_prompt: str
+) -> str:
     """Use Claude to synthesize/arbitrate multiple outputs."""
     clients = get_clients()
 
@@ -157,7 +173,9 @@ FINAL ANSWER:"""
     return response.content
 
 
-def log_interaction(prompt: str, response: LLMResponse, latency_ms: int, metadata: dict = None):
+def log_interaction(
+    prompt: str, response: LLMResponse, latency_ms: int, metadata: dict = None
+):
     """Log interaction to Pinecone."""
     try:
         memory = get_memory()
@@ -191,7 +209,9 @@ with st.sidebar:
     # Project & Task
     st.subheader("Context")
 
-    existing_projects = ["default"] + [p.name for p in PROJECTS_DIR.iterdir() if p.is_dir()]
+    existing_projects = ["default"] + [
+        p.name for p in PROJECTS_DIR.iterdir() if p.is_dir()
+    ]
 
     project = st.selectbox(
         "Project",
@@ -245,8 +265,12 @@ with st.sidebar:
                         f"{r['metadata'].get('timestamp', '')[:10]} - {r['metadata'].get('task', '')}"
                     ):
                         st.write(f"**Model:** {r['metadata'].get('model', 'N/A')}")
-                        st.write(f"**Prompt:** {r['metadata'].get('prompt_preview', 'N/A')}")
-                        st.write(f"**Response:** {r['metadata'].get('response_preview', 'N/A')}")
+                        st.write(
+                            f"**Prompt:** {r['metadata'].get('prompt_preview', 'N/A')}"
+                        )
+                        st.write(
+                            f"**Response:** {r['metadata'].get('response_preview', 'N/A')}"
+                        )
             else:
                 st.info("No matching interactions found")
         except Exception as e:
@@ -257,7 +281,9 @@ with st.sidebar:
 # MAIN AREA - TABS
 # =============================================================================
 
-tab_chat, tab_pipelines = st.tabs(["💬 Chat", "🔧 Pipelines"])
+tab_chat, tab_pipelines, tab_autonomous = st.tabs(
+    ["💬 Chat", "🔧 Pipelines", "🤖 Autonomous"]
+)
 
 # =============================================================================
 # CHAT TAB
@@ -281,7 +307,11 @@ with tab_chat:
         st.session_state.selected_models = (
             selected
             if selected
-            else (["claude"] if "claude" in available else [available[0]] if available else [])
+            else (
+                ["claude"]
+                if "claude" in available
+                else [available[0]] if available else []
+            )
         )
 
     with col2:
@@ -343,18 +373,26 @@ with tab_chat:
                         st.subheader("Individual Outputs")
                         for model, (response, latency) in results.items():
                             with st.expander(
-                                f"{model} ({latency}ms)" if response else f"{model} (failed)"
+                                f"{model} ({latency}ms)"
+                                if response
+                                else f"{model} (failed)"
                             ):
                                 if response:
                                     st.markdown(response.content)
-                                    log_interaction(prompt, response, latency, {"mode": "parallel"})
+                                    log_interaction(
+                                        prompt, response, latency, {"mode": "parallel"}
+                                    )
                                 else:
                                     st.error(f"Failed: {latency}")
 
-                        successful = {m: r for m, r in results.items() if r[0] is not None}
+                        successful = {
+                            m: r for m, r in results.items() if r[0] is not None
+                        }
                         if len(successful) > 1:
                             st.subheader("Synthesized Result")
-                            with st.spinner("Claude is synthesizing the best answer..."):
+                            with st.spinner(
+                                "Claude is synthesizing the best answer..."
+                            ):
                                 synthesis = synthesize_outputs(successful, prompt)
                                 st.markdown(synthesis)
                                 st.session_state.messages.append(
@@ -380,11 +418,15 @@ with tab_chat:
 
                 with st.spinner(f"Calling {len(models)} models sequentially..."):
                     try:
-                        results = call_models_sequential(prompt, models, pass_output=pass_output)
+                        results = call_models_sequential(
+                            prompt, models, pass_output=pass_output
+                        )
 
                         for model, (response, latency) in results.items():
                             with st.expander(
-                                f"{model} ({latency}ms)" if response else f"{model} (failed)"
+                                f"{model} ({latency}ms)"
+                                if response
+                                else f"{model} (failed)"
                             ):
                                 if response:
                                     st.markdown(response.content)
@@ -394,7 +436,9 @@ with tab_chat:
                                         latency,
                                         {
                                             "mode": mode,
-                                            "sequence_position": list(results.keys()).index(model),
+                                            "sequence_position": list(
+                                                results.keys()
+                                            ).index(model),
                                         },
                                     )
                                 else:
@@ -448,10 +492,14 @@ with tab_chat:
 
 with tab_pipelines:
     st.header("LangGraph Pipelines")
-    st.caption("Build multi-step LLM workflows with user-defined model selection per node")
+    st.caption(
+        "Build multi-step LLM workflows with user-defined model selection per node"
+    )
 
     pipeline_subtab = st.radio(
-        "Mode:", ["Run Pipeline", "Create Pipeline", "Manage Pipelines"], horizontal=True
+        "Mode:",
+        ["Run Pipeline", "Create Pipeline", "Manage Pipelines"],
+        horizontal=True,
     )
 
     st.divider()
@@ -475,7 +523,9 @@ with tab_pipelines:
                 st.info("No saved pipelines yet. Create one or use a template.")
             else:
                 pipeline_names = [p["name"] for p in saved_pipelines]
-                selected_pipeline = st.selectbox("Select pipeline:", options=pipeline_names)
+                selected_pipeline = st.selectbox(
+                    "Select pipeline:", options=pipeline_names
+                )
 
                 if selected_pipeline:
                     pipeline = get_pipeline(selected_pipeline)
@@ -502,7 +552,9 @@ with tab_pipelines:
                                     st.session_state.pipeline_results = result
 
                                 if result.success:
-                                    st.success(f"Pipeline completed in {result.total_latency_ms}ms")
+                                    st.success(
+                                        f"Pipeline completed in {result.total_latency_ms}ms"
+                                    )
                                 else:
                                     st.error("Pipeline completed with errors")
 
@@ -515,7 +567,9 @@ with tab_pipelines:
                                         output = result.node_outputs[node_name]
                                         with st.expander(
                                             f"**{node_name}** ({output['model']}, {output['latency_ms']}ms)",
-                                            expanded=(node_name == pipeline.finish_points[0]),
+                                            expanded=(
+                                                node_name == pipeline.finish_points[0]
+                                            ),
                                         ):
                                             st.markdown(output["content"])
 
@@ -556,7 +610,9 @@ with tab_pipelines:
                 for i, node_name in enumerate(node_names):
                     with cols[i]:
                         llm_assignments[node_name] = st.selectbox(
-                            f"{node_name}:", options=available, key=f"template_llm_{node_name}"
+                            f"{node_name}:",
+                            options=available,
+                            key=f"template_llm_{node_name}",
                         )
 
                 pipeline_input = st.text_area(
@@ -571,20 +627,26 @@ with tab_pipelines:
                     if st.button("Run from Template", type="primary"):
                         if pipeline_input and all(llm_assignments.values()):
                             try:
-                                pipeline = create_from_template(selected_template, llm_assignments)
+                                pipeline = create_from_template(
+                                    selected_template, llm_assignments
+                                )
                                 with st.spinner("Executing pipeline..."):
                                     result = pipeline.run(pipeline_input)
                                     st.session_state.pipeline_results = result
 
                                 if result.success:
-                                    st.success(f"Completed in {result.total_latency_ms}ms")
+                                    st.success(
+                                        f"Completed in {result.total_latency_ms}ms"
+                                    )
                                 else:
                                     st.error("Completed with errors")
 
                                 for node_name in pipeline.get_node_order():
                                     if node_name in result.node_outputs:
                                         output = result.node_outputs[node_name]
-                                        with st.expander(f"**{node_name}** ({output['model']})"):
+                                        with st.expander(
+                                            f"**{node_name}** ({output['model']})"
+                                        ):
                                             st.markdown(output["content"])
 
                                 st.subheader("Final Output")
@@ -593,7 +655,9 @@ with tab_pipelines:
                             except Exception as e:
                                 st.error(f"Error: {e}")
                         else:
-                            st.warning("Please enter input and select LLMs for all nodes")
+                            st.warning(
+                                "Please enter input and select LLMs for all nodes"
+                            )
 
                 with col2:
                     save_name = st.text_input("Save as:", placeholder="my_pipeline")
@@ -601,7 +665,9 @@ with tab_pipelines:
                         if save_name and all(llm_assignments.values()):
                             try:
                                 pipeline = create_from_template(
-                                    selected_template, llm_assignments, new_name=save_name
+                                    selected_template,
+                                    llm_assignments,
+                                    new_name=save_name,
                                 )
                                 save_pipeline(pipeline)
                                 st.success(f"Saved as '{save_name}'")
@@ -616,8 +682,12 @@ with tab_pipelines:
         st.subheader("Build a Custom Pipeline")
 
         # Pipeline metadata
-        pipeline_name = st.text_input("Pipeline name:", placeholder="my_custom_pipeline")
-        pipeline_desc = st.text_input("Description:", placeholder="What does this pipeline do?")
+        pipeline_name = st.text_input(
+            "Pipeline name:", placeholder="my_custom_pipeline"
+        )
+        pipeline_desc = st.text_input(
+            "Description:", placeholder="What does this pipeline do?"
+        )
 
         st.divider()
 
@@ -628,21 +698,30 @@ with tab_pipelines:
             st.session_state.builder_nodes = []
 
         # Add node form
-        with st.expander("Add New Node", expanded=len(st.session_state.builder_nodes) == 0):
-            node_name = st.text_input("Node name:", placeholder="summarize", key="new_node_name")
+        with st.expander(
+            "Add New Node", expanded=len(st.session_state.builder_nodes) == 0
+        ):
+            node_name = st.text_input(
+                "Node name:", placeholder="summarize", key="new_node_name"
+            )
             node_llm = st.selectbox("LLM:", options=available, key="new_node_llm")
             node_system = st.text_area(
-                "System prompt:", placeholder="Instructions for this node...", key="new_node_system"
+                "System prompt:",
+                placeholder="Instructions for this node...",
+                key="new_node_system",
             )
             node_input = st.selectbox(
                 "Input from:",
-                options=["input (user text)"] + [n["name"] for n in st.session_state.builder_nodes],
+                options=["input (user text)"]
+                + [n["name"] for n in st.session_state.builder_nodes],
                 key="new_node_input",
             )
 
             if st.button("Add Node"):
                 if node_name and node_llm:
-                    input_key = "input" if node_input == "input (user text)" else node_input
+                    input_key = (
+                        "input" if node_input == "input (user text)" else node_input
+                    )
                     st.session_state.builder_nodes.append(
                         {
                             "name": node_name,
@@ -661,10 +740,15 @@ with tab_pipelines:
             for i, node in enumerate(st.session_state.builder_nodes):
                 col1, col2, col3 = st.columns([3, 1, 1])
                 with col1:
-                    st.write(f"**{i+1}. {node['name']}** ({node['llm']}) ← {node['input_key']}")
+                    st.write(
+                        f"**{i+1}. {node['name']}** ({node['llm']}) ← {node['input_key']}"
+                    )
                 with col2:
                     if st.button("⬆", key=f"up_{i}") and i > 0:
-                        st.session_state.builder_nodes[i], st.session_state.builder_nodes[i - 1] = (
+                        (
+                            st.session_state.builder_nodes[i],
+                            st.session_state.builder_nodes[i - 1],
+                        ) = (
                             st.session_state.builder_nodes[i - 1],
                             st.session_state.builder_nodes[i],
                         )
@@ -680,7 +764,9 @@ with tab_pipelines:
             if st.button("Create Pipeline", type="primary"):
                 if pipeline_name and len(st.session_state.builder_nodes) >= 1:
                     try:
-                        pipeline = BasePipeline(name=pipeline_name, description=pipeline_desc)
+                        pipeline = BasePipeline(
+                            name=pipeline_name, description=pipeline_desc
+                        )
 
                         for node in st.session_state.builder_nodes:
                             pipeline.add_node(
@@ -700,8 +786,12 @@ with tab_pipelines:
                                 st.session_state.builder_nodes[i + 1]["name"],
                             )
 
-                        pipeline.set_entry_point(st.session_state.builder_nodes[0]["name"])
-                        pipeline.set_finish_point(st.session_state.builder_nodes[-1]["name"])
+                        pipeline.set_entry_point(
+                            st.session_state.builder_nodes[0]["name"]
+                        )
+                        pipeline.set_finish_point(
+                            st.session_state.builder_nodes[-1]["name"]
+                        )
 
                         # Validate and save
                         pipeline.compile()
@@ -760,3 +850,400 @@ with tab_pipelines:
                             delete_pipeline(p["name"])
                             st.success(f"Deleted '{p['name']}'")
                             st.rerun()
+
+
+# =============================================================================
+# AUTONOMOUS EXECUTION TAB
+# =============================================================================
+
+with tab_autonomous:
+    st.header("Autonomous Execution")
+    st.caption("Run pipelines with auto-retry, debugging, and checkpoints")
+
+    auto_subtab = st.radio(
+        "Mode:",
+        ["Run Autonomous", "View Escalations", "Manage Checkpoints"],
+        horizontal=True,
+        key="auto_subtab",
+    )
+
+    st.divider()
+
+    # -------------------------------------------------------------------------
+    # RUN AUTONOMOUS
+    # -------------------------------------------------------------------------
+    if auto_subtab == "Run Autonomous":
+        st.subheader("Autonomous Pipeline Execution")
+
+        # Pipeline selection
+        saved_pipelines = list_pipelines()
+        templates = get_pipeline_templates()
+
+        if not saved_pipelines and not templates:
+            st.info("No pipelines available. Create one in the Pipelines tab first.")
+        else:
+            # Source selection
+            auto_source = st.radio(
+                "Pipeline source:",
+                ["Saved Pipelines", "Templates"],
+                horizontal=True,
+                key="auto_source",
+            )
+
+            if auto_source == "Saved Pipelines" and saved_pipelines:
+                pipeline_names = [p["name"] for p in saved_pipelines]
+                selected_auto_pipeline = st.selectbox(
+                    "Select pipeline:",
+                    options=pipeline_names,
+                    key="auto_pipeline_select",
+                )
+                pipeline = (
+                    get_pipeline(selected_auto_pipeline)
+                    if selected_auto_pipeline
+                    else None
+                )
+
+            elif auto_source == "Templates" and templates:
+                template_names = [t["name"] for t in templates]
+                selected_template = st.selectbox(
+                    "Select template:",
+                    options=template_names,
+                    key="auto_template_select",
+                )
+
+                if selected_template:
+                    template = next(
+                        t for t in templates if t["name"] == selected_template
+                    )
+                    template_data = template["template"]
+                    node_names = list(template_data["nodes"].keys())
+
+                    st.write("**Configure LLMs for each node:**")
+                    llm_assignments = {}
+                    cols = st.columns(len(node_names))
+                    for i, node_name in enumerate(node_names):
+                        with cols[i]:
+                            llm_assignments[node_name] = st.selectbox(
+                                f"{node_name}:",
+                                options=available,
+                                key=f"auto_template_llm_{node_name}",
+                            )
+
+                    if all(llm_assignments.values()):
+                        pipeline = create_from_template(
+                            selected_template, llm_assignments
+                        )
+                    else:
+                        pipeline = None
+                else:
+                    pipeline = None
+            else:
+                pipeline = None
+
+            if pipeline:
+                st.write(f"**Pipeline:** {pipeline.name}")
+                st.write(f"**Nodes:** {' → '.join(pipeline.get_node_order())}")
+
+                # Execution configuration
+                st.subheader("Execution Settings")
+
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    exec_mode = st.selectbox(
+                        "Execution mode:",
+                        options=["autonomous", "supervised", "manual"],
+                        format_func=lambda x: {
+                            "autonomous": "Autonomous (full auto-retry)",
+                            "supervised": "Supervised (checkpoints require approval)",
+                            "manual": "Manual (no auto-retry)",
+                        }[x],
+                        key="auto_exec_mode",
+                    )
+
+                with col2:
+                    max_retries = st.number_input(
+                        "Max retries per node:",
+                        min_value=0,
+                        max_value=10,
+                        value=3,
+                        key="auto_max_retries",
+                    )
+
+                with col3:
+                    auto_debug = st.checkbox(
+                        "Enable auto-debugging", value=True, key="auto_debug"
+                    )
+
+                # Checkpoint nodes
+                checkpoint_nodes = st.multiselect(
+                    "Nodes requiring approval (checkpoints):",
+                    options=list(pipeline.nodes.keys()),
+                    key="auto_checkpoint_nodes",
+                )
+
+                st.divider()
+
+                # Input
+                auto_input = st.text_area(
+                    "Input text:",
+                    height=150,
+                    placeholder="Enter text to process autonomously...",
+                    key="auto_input",
+                )
+
+                if st.button("Run Autonomous", type="primary", key="run_auto"):
+                    if auto_input:
+                        # Create executor
+                        executor = AutonomousExecutor(
+                            pipeline=pipeline,
+                            max_retries=max_retries,
+                            checkpoint_nodes=checkpoint_nodes,
+                            auto_debug=auto_debug,
+                        )
+
+                        exec_mode_enum = {
+                            "autonomous": ExecutionMode.AUTONOMOUS,
+                            "supervised": ExecutionMode.SUPERVISED,
+                            "manual": ExecutionMode.MANUAL,
+                        }[exec_mode]
+
+                        with st.spinner("Executing autonomously..."):
+                            result = executor.run(
+                                auto_input, execution_mode=exec_mode_enum
+                            )
+                            st.session_state.autonomous_result = result
+
+                        # Show results
+                        if result.success:
+                            st.success(
+                                f"Pipeline completed successfully in {result.total_latency_ms}ms"
+                            )
+                        else:
+                            st.error("Pipeline failed - see details below")
+
+                        # Results tabs
+                        result_tab1, result_tab2, result_tab3 = st.tabs(
+                            ["Output", "Retry History", "Execution Trace"]
+                        )
+
+                        with result_tab1:
+                            st.subheader("Node Outputs")
+                            for node_name in pipeline.get_node_order():
+                                if node_name in result.node_outputs:
+                                    output = result.node_outputs[node_name]
+                                    with st.expander(
+                                        f"**{node_name}** ({output.get('model', 'N/A')})",
+                                        expanded=(
+                                            node_name == pipeline.finish_points[0]
+                                        ),
+                                    ):
+                                        st.markdown(output.get("content", ""))
+                                        st.caption(
+                                            f"Latency: {output.get('latency_ms', 0)}ms"
+                                        )
+
+                            st.subheader("Final Output")
+                            st.markdown(result.final_output)
+
+                            # Metrics
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric(
+                                    "Total Latency", f"{result.total_latency_ms}ms"
+                                )
+                            with col2:
+                                st.metric(
+                                    "Tokens",
+                                    f"{result.total_tokens.get('input_tokens', 0) + result.total_tokens.get('output_tokens', 0)}",
+                                )
+                            with col3:
+                                st.metric("Checkpoints", result.checkpoints_created)
+
+                        with result_tab2:
+                            if result.retry_attempts:
+                                st.subheader(
+                                    f"Retry Attempts ({len(result.retry_attempts)})"
+                                )
+                                for attempt in result.retry_attempts:
+                                    status = "✅" if attempt.success else "❌"
+                                    with st.expander(
+                                        f"{status} {attempt.node_name} - Attempt #{attempt.attempt_number}"
+                                    ):
+                                        st.write(
+                                            f"**Error Type:** {attempt.error_type.value}"
+                                        )
+                                        st.write(
+                                            f"**Error:** {attempt.error_message[:200]}..."
+                                        )
+                                        if attempt.fix_type:
+                                            st.write(
+                                                f"**Fix Applied:** {attempt.fix_type.value}"
+                                            )
+                                        if attempt.fix_details:
+                                            st.write(
+                                                f"**Fix Details:** {attempt.fix_details}"
+                                            )
+                                        st.write(f"**Latency:** {attempt.latency_ms}ms")
+                            else:
+                                st.info(
+                                    "No retry attempts - execution succeeded on first try!"
+                                )
+
+                            if result.escalations:
+                                st.subheader(f"Escalations ({len(result.escalations)})")
+                                for esc in result.escalations:
+                                    st.error(f"**{esc.node_name}**: {esc.reason}")
+                                    st.write(f"**Error:** {esc.error_summary[:300]}...")
+                                    st.write("**Suggested Actions:**")
+                                    for action in esc.suggested_actions[:5]:
+                                        st.write(f"  • {action}")
+
+                        with result_tab3:
+                            st.subheader("Execution Trace")
+                            for event in result.trace_log:
+                                timestamp = event.get("timestamp", "")[:19]
+                                event_type = event.get("event", "")
+                                data = event.get("data", {})
+
+                                icon = {
+                                    "execution_start": "🚀",
+                                    "node_start": "▶️",
+                                    "node_success": "✅",
+                                    "node_error": "❌",
+                                    "retry_strategy": "🔄",
+                                    "debug_analysis": "🔍",
+                                    "fix_applied": "🔧",
+                                    "checkpoint_saved": "💾",
+                                    "escalation_created": "🚨",
+                                    "execution_complete": "🏁",
+                                }.get(event_type, "•")
+
+                                st.write(f"{icon} **{timestamp}** - {event_type}")
+                                if data:
+                                    st.caption(str(data)[:100])
+
+                    else:
+                        st.warning("Please enter input text")
+
+    # -------------------------------------------------------------------------
+    # VIEW ESCALATIONS
+    # -------------------------------------------------------------------------
+    elif auto_subtab == "View Escalations":
+        st.subheader("Escalations")
+
+        escalation_mgr = EscalationManager()
+        escalations = escalation_mgr.list_escalations(unresolved_only=False, limit=20)
+
+        if not escalations:
+            st.info("No escalations yet.")
+        else:
+            # Filter
+            show_unresolved = st.checkbox("Show unresolved only", value=True)
+            filtered = [e for e in escalations if not show_unresolved or not e.resolved]
+
+            st.write(f"**Showing {len(filtered)} escalations**")
+
+            for esc in filtered:
+                status = "✅ Resolved" if esc.resolved else "❌ Unresolved"
+                with st.expander(
+                    f"**{esc.node_name}** - {esc.timestamp[:10]} ({status})"
+                ):
+                    st.write(f"**Pipeline:** {esc.pipeline_id}")
+                    st.write(f"**Reason:** {esc.reason}")
+                    st.write(f"**Error:** {esc.error_summary[:500]}")
+
+                    st.write("**Suggested Actions:**")
+                    for action in esc.suggested_actions:
+                        st.write(f"  • {action}")
+
+                    if not esc.resolved:
+                        resolution = st.text_input(
+                            "Resolution notes:",
+                            key=f"resolve_{esc.escalation_id}",
+                        )
+                        if st.button(
+                            "Mark Resolved", key=f"resolve_btn_{esc.escalation_id}"
+                        ):
+                            escalation_mgr.resolve(
+                                esc.escalation_id,
+                                resolution or "Manually resolved",
+                            )
+                            st.success("Escalation resolved")
+                            st.rerun()
+
+    # -------------------------------------------------------------------------
+    # MANAGE CHECKPOINTS
+    # -------------------------------------------------------------------------
+    else:
+        st.subheader("Checkpoints")
+
+        checkpoint_mgr = CheckpointManager()
+
+        # Get all pipeline IDs from saved pipelines
+        saved = list_pipelines()
+        pipeline_ids = list(set(p["name"] for p in saved))
+
+        if not pipeline_ids:
+            st.info("No pipelines with checkpoints yet.")
+        else:
+            selected_pipeline_id = st.selectbox(
+                "Filter by pipeline:",
+                options=["All"] + pipeline_ids,
+                key="checkpoint_pipeline_filter",
+            )
+
+            filter_id = None if selected_pipeline_id == "All" else selected_pipeline_id
+            checkpoints = checkpoint_mgr.list_checkpoints(pipeline_id=filter_id)
+
+            if not checkpoints:
+                st.info("No checkpoints found.")
+            else:
+                # Summary
+                summary = checkpoint_mgr.get_checkpoint_summary(filter_id or "")
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Total", summary.get("total", 0))
+                with col2:
+                    st.metric("Approved", summary.get("approved", 0))
+                with col3:
+                    st.metric("Pending", summary.get("pending", 0))
+                with col4:
+                    st.metric("Rejected", summary.get("rejected", 0))
+
+                st.divider()
+
+                for ckpt in checkpoints[:20]:
+                    status = (
+                        "✅ Approved"
+                        if ckpt.approved
+                        else ("❌ Rejected" if ckpt.approved is False else "⏳ Pending")
+                    )
+                    with st.expander(
+                        f"**{ckpt.node_name}** - {ckpt.timestamp[:16]} ({status})"
+                    ):
+                        st.write(f"**Checkpoint ID:** {ckpt.checkpoint_id}")
+                        st.write(f"**Type:** {ckpt.checkpoint_type}")
+
+                        if ckpt.approved is None:
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                if st.button(
+                                    "Approve", key=f"approve_{ckpt.checkpoint_id}"
+                                ):
+                                    checkpoint_mgr.approve(ckpt.checkpoint_id)
+                                    st.success("Checkpoint approved")
+                                    st.rerun()
+                            with col2:
+                                reject_reason = st.text_input(
+                                    "Rejection reason:",
+                                    key=f"reject_reason_{ckpt.checkpoint_id}",
+                                )
+                                if st.button(
+                                    "Reject", key=f"reject_{ckpt.checkpoint_id}"
+                                ):
+                                    checkpoint_mgr.reject(
+                                        ckpt.checkpoint_id,
+                                        reject_reason or "Rejected by user",
+                                    )
+                                    st.warning("Checkpoint rejected")
+                                    st.rerun()
