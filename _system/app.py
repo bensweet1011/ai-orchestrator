@@ -3,15 +3,21 @@ AI Orchestrator - Streamlit UI
 Your command center for orchestrating LLMs.
 """
 
-import streamlit as st
-import time
-from typing import List, Dict
-from concurrent.futures import ThreadPoolExecutor
 import sys
 from pathlib import Path
 
 # Add parent to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
+
+# Load environment variables from .env file (must be before other imports)
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).parent / ".env")
+
+import streamlit as st
+import time
+from typing import List, Dict
+from concurrent.futures import ThreadPoolExecutor
 
 from ai_orchestrator.config import (
     MODELS,
@@ -286,8 +292,8 @@ with st.sidebar:
 # MAIN AREA - TABS
 # =============================================================================
 
-tab_chat, tab_pipelines, tab_autonomous, tab_memory = st.tabs(
-    ["💬 Chat", "🔧 Pipelines", "🤖 Autonomous", "🧠 Memory"]
+tab_chat, tab_pipelines, tab_autonomous, tab_memory, tab_integrations = st.tabs(
+    ["💬 Chat", "🔧 Pipelines", "🤖 Autonomous", "🧠 Memory", "🔗 Integrations"]
 )
 
 # =============================================================================
@@ -1576,3 +1582,317 @@ with tab_memory:
 
         except Exception as e:
             st.error(f"Failed to load namespace stats: {e}")
+
+# =============================================================================
+# INTEGRATIONS TAB
+# =============================================================================
+
+with tab_integrations:
+    st.header("External Integrations")
+
+    from ai_orchestrator.config import get_integration_status
+
+    integration_status = get_integration_status()
+
+    # Status indicators
+    col1, col2 = st.columns(2)
+    with col1:
+        if integration_status["notion"]:
+            st.success("Notion: Connected")
+        else:
+            st.warning("Notion: Not configured (set NOTION_API_KEY)")
+
+    with col2:
+        if integration_status["google_docs"]:
+            st.success("Google Docs: Credentials found")
+        else:
+            st.warning("Google Docs: Not configured (add google_credentials.json)")
+
+    # Sub-tabs for each integration
+    integ_subtab = st.radio(
+        "Select Integration:",
+        ["Notion", "Google Docs"],
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+
+    st.divider()
+
+    # -------------------------------------------------------------------------
+    # NOTION
+    # -------------------------------------------------------------------------
+    if integ_subtab == "Notion":
+        if not integration_status["notion"]:
+            st.info(
+                "To use Notion integration, set the `NOTION_API_KEY` environment variable "
+                "or add it to the `.env` file."
+            )
+        else:
+            from ai_orchestrator.integrations import get_notion_client
+
+            notion_action = st.radio(
+                "Action:",
+                ["Read Page", "Query Database", "Create Project Page", "Log Pipeline Run"],
+                horizontal=True,
+            )
+
+            try:
+                notion = get_notion_client()
+
+                if notion_action == "Read Page":
+                    st.subheader("Read Notion Page")
+
+                    page_id = st.text_input(
+                        "Page ID or URL:",
+                        placeholder="https://notion.so/... or page ID",
+                    )
+
+                    if st.button("Read Page", type="primary") and page_id:
+                        with st.spinner("Reading page..."):
+                            try:
+                                page = notion.get_page(page_id)
+                                st.success(f"**{page['title']}**")
+                                st.write(f"URL: {page['url']}")
+                                st.divider()
+                                st.markdown(page["content"])
+
+                                # Option to use as pipeline input
+                                if st.button("Use as Pipeline Input"):
+                                    st.session_state["pipeline_input_from_notion"] = page[
+                                        "content"
+                                    ]
+                                    st.info("Content saved. Go to Pipelines tab to use it.")
+                            except Exception as e:
+                                st.error(f"Failed to read page: {e}")
+
+                elif notion_action == "Query Database":
+                    st.subheader("Query Notion Database")
+
+                    db_id = st.text_input(
+                        "Database ID or URL:",
+                        placeholder="https://notion.so/... or database ID",
+                    )
+
+                    limit = st.slider("Max results:", 5, 100, 20)
+
+                    if st.button("Query Database", type="primary") and db_id:
+                        with st.spinner("Querying database..."):
+                            try:
+                                results = notion.query_database(db_id, limit=limit)
+                                st.success(f"Found {len(results)} pages")
+
+                                for page in results:
+                                    with st.expander(f"**{page['title']}**"):
+                                        st.write(f"ID: `{page['id']}`")
+                                        st.write(f"URL: {page['url']}")
+                                        st.write(
+                                            f"Last edited: {page['last_edited_time'][:10]}"
+                                        )
+
+                                        if st.button("Read Full", key=f"read_{page['id']}"):
+                                            full_page = notion.get_page(page["id"])
+                                            st.markdown(full_page["content"])
+                            except Exception as e:
+                                st.error(f"Failed to query database: {e}")
+
+                elif notion_action == "Create Project Page":
+                    st.subheader("Create Project Page")
+
+                    db_id = st.text_input(
+                        "Projects Database ID:",
+                        placeholder="Database ID where project will be created",
+                    )
+
+                    project_name = st.text_input("Project Name:")
+                    description = st.text_area("Description:", height=100)
+                    status = st.selectbox(
+                        "Initial Status:", ["Not Started", "In Progress", "Completed"]
+                    )
+
+                    if (
+                        st.button("Create Project", type="primary")
+                        and db_id
+                        and project_name
+                    ):
+                        with st.spinner("Creating project page..."):
+                            try:
+                                result = notion.create_project_page(
+                                    database_id=db_id,
+                                    project_name=project_name,
+                                    description=description,
+                                    status=status,
+                                )
+                                st.success(f"Created project: **{project_name}**")
+                                st.write(f"URL: {result['url']}")
+                            except Exception as e:
+                                st.error(f"Failed to create project: {e}")
+
+                elif notion_action == "Log Pipeline Run":
+                    st.subheader("Log Pipeline Run to Notion")
+
+                    db_id = st.text_input(
+                        "Pipeline Logs Database ID:",
+                        placeholder="Database ID for pipeline logs",
+                    )
+
+                    # Check for recent pipeline results
+                    if "pipeline_results" in st.session_state:
+                        result = st.session_state.pipeline_results
+                        st.info(
+                            f"Recent pipeline result available (Success: {result.success})"
+                        )
+
+                        if st.button("Log Recent Result", type="primary") and db_id:
+                            with st.spinner("Logging to Notion..."):
+                                try:
+                                    log_result = notion.log_pipeline_run(
+                                        database_id=db_id,
+                                        pipeline_name="UI Pipeline",
+                                        input_text=st.session_state.get(
+                                            "last_pipeline_input", "N/A"
+                                        ),
+                                        output_text=result.final_output,
+                                        success=result.success,
+                                        latency_ms=result.total_latency_ms,
+                                        model_info=", ".join(
+                                            output.get("model", "")
+                                            for output in result.node_outputs.values()
+                                        ),
+                                    )
+                                    st.success("Logged pipeline run to Notion!")
+                                    st.write(f"URL: {log_result['url']}")
+                                except Exception as e:
+                                    st.error(f"Failed to log: {e}")
+                    else:
+                        st.info("No recent pipeline results. Run a pipeline first.")
+
+            except Exception as e:
+                st.error(f"Failed to initialize Notion client: {e}")
+
+    # -------------------------------------------------------------------------
+    # GOOGLE DOCS
+    # -------------------------------------------------------------------------
+    elif integ_subtab == "Google Docs":
+        if not integration_status["google_docs"]:
+            st.info(
+                "To use Google Docs integration, add `google_credentials.json` "
+                "to the `_system/` directory."
+            )
+        else:
+            from ai_orchestrator.integrations import get_google_docs_client
+
+            gdocs_action = st.radio(
+                "Action:",
+                ["Read Document", "Create Document", "Update Document", "List Documents"],
+                horizontal=True,
+            )
+
+            try:
+                gdocs = get_google_docs_client()
+
+                if gdocs_action == "Read Document":
+                    st.subheader("Read Google Doc")
+
+                    doc_id = st.text_input(
+                        "Document ID or URL:",
+                        placeholder="https://docs.google.com/document/d/... or doc ID",
+                    )
+
+                    if st.button("Read Document", type="primary") and doc_id:
+                        with st.spinner("Reading document..."):
+                            try:
+                                doc = gdocs.get_document(doc_id)
+                                st.success(f"**{doc['title']}**")
+                                st.write(f"URL: {doc['url']}")
+                                st.divider()
+                                st.text_area(
+                                    "Content:", doc["content"], height=400, disabled=True
+                                )
+
+                                # Option to use as pipeline input
+                                if st.button("Use as Pipeline Input"):
+                                    st.session_state["pipeline_input_from_gdocs"] = doc[
+                                        "content"
+                                    ]
+                                    st.info("Content saved. Go to Pipelines tab to use it.")
+                            except Exception as e:
+                                st.error(f"Failed to read document: {e}")
+
+                elif gdocs_action == "Create Document":
+                    st.subheader("Create Google Doc")
+
+                    title = st.text_input("Document Title:")
+                    content = st.text_area("Content:", height=200)
+
+                    # Check for pipeline output to use
+                    if "pipeline_results" in st.session_state:
+                        if st.checkbox("Use recent pipeline output as content"):
+                            content = st.session_state.pipeline_results.final_output
+                            st.text_area(
+                                "Pipeline Output Preview:",
+                                content[:500] + "..." if len(content) > 500 else content,
+                                disabled=True,
+                            )
+
+                    if st.button("Create Document", type="primary") and title:
+                        with st.spinner("Creating document..."):
+                            try:
+                                result = gdocs.create_document(title=title, content=content)
+                                st.success(f"Created document: **{title}**")
+                                st.write(f"URL: {result['url']}")
+                            except Exception as e:
+                                st.error(f"Failed to create document: {e}")
+
+                elif gdocs_action == "Update Document":
+                    st.subheader("Update Google Doc")
+
+                    doc_id = st.text_input("Document ID or URL:")
+                    new_content = st.text_area("New Content:", height=200)
+
+                    update_mode = st.radio(
+                        "Update Mode:", ["Replace All", "Append"], horizontal=True
+                    )
+
+                    if st.button("Update Document", type="primary") and doc_id and new_content:
+                        with st.spinner("Updating document..."):
+                            try:
+                                if update_mode == "Replace All":
+                                    result = gdocs.update_document(doc_id, new_content)
+                                else:
+                                    result = gdocs.append_to_document(doc_id, new_content)
+
+                                st.success("Document updated!")
+                                st.write(f"URL: {result['url']}")
+                            except Exception as e:
+                                st.error(f"Failed to update document: {e}")
+
+                elif gdocs_action == "List Documents":
+                    st.subheader("List Google Docs")
+
+                    limit = st.slider("Max results:", 5, 50, 20)
+
+                    if st.button("List Documents", type="primary"):
+                        with st.spinner("Listing documents..."):
+                            try:
+                                docs = gdocs.list_documents(limit=limit)
+                                st.success(f"Found {len(docs)} documents")
+
+                                for doc in docs:
+                                    with st.expander(f"**{doc['title']}**"):
+                                        st.write(f"ID: `{doc['id']}`")
+                                        st.write(f"URL: {doc['url']}")
+                                        st.write(f"Modified: {doc['modified_time'][:10]}")
+
+                                        if st.button("Read", key=f"read_gdoc_{doc['id']}"):
+                                            full_doc = gdocs.get_document(doc["id"])
+                                            st.text_area(
+                                                "Content:",
+                                                full_doc["content"],
+                                                height=200,
+                                                disabled=True,
+                                            )
+                            except Exception as e:
+                                st.error(f"Failed to list documents: {e}")
+
+            except Exception as e:
+                st.error(f"Failed to initialize Google Docs client: {e}")
