@@ -193,8 +193,10 @@ def create_llm_node(config: NodeConfig) -> Callable[[PipelineState], PipelineSta
                     context_sources = [
                         {"id": s["id"], "score": s["score"]} for s in injection.sources
                     ]
-            except Exception:
-                pass  # Continue without memory if it fails
+            except Exception as e:
+                import sys
+                print(f"Warning: Memory context injection failed: {e}", file=sys.stderr)
+                # Continue without memory enhancement
 
         # Apply template if provided
         if config.input_template:

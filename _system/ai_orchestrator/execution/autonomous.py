@@ -573,8 +573,10 @@ class AutonomousExecutor:
                 input_text=input_text,
                 project=state.get("custom", {}).get("project"),
             )
-        except Exception:
-            pass  # Don't let memory logging failure break execution
+        except Exception as e:
+            import sys
+            print(f"Warning: Memory logging failed during execution: {e}", file=sys.stderr)
+            # Don't let memory logging failure break execution
 
     def resume(
         self,

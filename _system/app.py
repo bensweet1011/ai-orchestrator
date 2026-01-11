@@ -246,7 +246,7 @@ with st.sidebar:
     st.session_state.current_project = project
 
     new_project = st.text_input("Or create new project:")
-    if new_project and st.button("Create Project"):
+    if new_project and st.button("Create Project", type="primary"):
         project_path = PROJECTS_DIR / new_project
         project_path.mkdir(exist_ok=True)
         st.session_state.current_project = new_project
@@ -274,12 +274,13 @@ with st.sidebar:
     st.subheader("Memory")
 
     search_query = st.text_input("Search past interactions:")
-    if search_query and st.button("Search"):
+    if search_query and st.button("Search", type="primary"):
         try:
-            memory = get_memory()
-            results = memory.search(
-                search_query, n_results=5, project=st.session_state.current_project
-            )
+            with st.spinner("Searching memory..."):
+                memory = get_memory()
+                results = memory.search(
+                    search_query, n_results=5, project=st.session_state.current_project
+                )
             if results:
                 for r in results:
                     with st.expander(
@@ -488,12 +489,28 @@ with tab_chat:
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        if st.button("Clear Chat"):
-            st.session_state.messages = []
-            st.rerun()
+        if "confirm_clear_chat" not in st.session_state:
+            st.session_state.confirm_clear_chat = False
+
+        if st.session_state.confirm_clear_chat:
+            st.warning("Clear all chat messages?")
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("Yes, Clear", type="primary"):
+                    st.session_state.messages = []
+                    st.session_state.confirm_clear_chat = False
+                    st.rerun()
+            with c2:
+                if st.button("Cancel"):
+                    st.session_state.confirm_clear_chat = False
+                    st.rerun()
+        else:
+            if st.button("Clear Chat"):
+                st.session_state.confirm_clear_chat = True
+                st.rerun()
 
     with col2:
-        if st.button("New Session"):
+        if st.button("New Session", type="primary"):
             try:
                 memory = get_memory()
                 memory.new_session()
@@ -867,10 +884,23 @@ with tab_pipelines:
                             st.success(f"Duplicated as '{new_name}'")
                             st.rerun()
                     with col3:
-                        if st.button("Delete", key=f"del_{p['name']}"):
-                            delete_pipeline(p["name"])
-                            st.success(f"Deleted '{p['name']}'")
-                            st.rerun()
+                        confirm_key = f"confirm_del_{p['name']}"
+                        if confirm_key not in st.session_state:
+                            st.session_state[confirm_key] = False
+
+                        if st.session_state[confirm_key]:
+                            if st.button("Confirm Delete", key=f"confirm_{p['name']}", type="primary"):
+                                delete_pipeline(p["name"])
+                                st.session_state[confirm_key] = False
+                                st.success(f"Deleted '{p['name']}'")
+                                st.rerun()
+                            if st.button("Cancel", key=f"cancel_del_{p['name']}"):
+                                st.session_state[confirm_key] = False
+                                st.rerun()
+                        else:
+                            if st.button("Delete", key=f"del_{p['name']}"):
+                                st.session_state[confirm_key] = True
+                                st.rerun()
 
 
 # =============================================================================
@@ -1324,16 +1354,17 @@ with tab_memory:
         if st.button("Search", type="primary", key="memory_search_btn"):
             if search_query:
                 try:
-                    store = get_memory_store()
-                    store.set_project(st.session_state.current_project)
+                    with st.spinner("Searching memory store..."):
+                        store = get_memory_store()
+                        store.set_project(st.session_state.current_project)
 
-                    results = store.search_pipeline_outputs(
-                        query=search_query,
-                        project=st.session_state.current_project,
-                        success_only=success_only,
-                        limit=search_limit,
-                        min_score=min_score,
-                    )
+                        results = store.search_pipeline_outputs(
+                            query=search_query,
+                            project=st.session_state.current_project,
+                            success_only=success_only,
+                            limit=search_limit,
+                            min_score=min_score,
+                        )
 
                     if results:
                         st.success(f"Found {len(results)} results")
@@ -1396,15 +1427,16 @@ with tab_memory:
             )
 
         try:
-            store = get_memory_store()
-            store.set_project(st.session_state.current_project)
+            with st.spinner("Loading pipeline history..."):
+                store = get_memory_store()
+                store.set_project(st.session_state.current_project)
 
-            pipeline_filter = None if filter_pipeline == "All" else filter_pipeline
-            runs = store.get_pipeline_history(
-                pipeline_name=pipeline_filter,
-                project=st.session_state.current_project,
-                limit=history_limit,
-            )
+                pipeline_filter = None if filter_pipeline == "All" else filter_pipeline
+                runs = store.get_pipeline_history(
+                    pipeline_name=pipeline_filter,
+                    project=st.session_state.current_project,
+                    limit=history_limit,
+                )
 
             if runs:
                 st.write(f"**Showing {len(runs)} runs**")
@@ -1581,12 +1613,29 @@ with tab_memory:
                         st.write(f"Vectors: {ns_stats.get('vector_count', 0)}")
                         st.write(f"Local Records: {ns_stats.get('local_records', 0)}")
 
-                        if st.button("Clear Memory", key=f"clear_{ns.project}"):
-                            if store.clear_namespace(ns.project):
-                                st.success(f"Cleared memory for {ns.project}")
+                        confirm_clear_key = f"confirm_clear_{ns.project}"
+                        if confirm_clear_key not in st.session_state:
+                            st.session_state[confirm_clear_key] = False
+
+                        if st.session_state[confirm_clear_key]:
+                            st.warning(f"This will permanently delete all memory for '{ns.project}'")
+                            c1, c2 = st.columns(2)
+                            with c1:
+                                if st.button("Yes, Clear All", key=f"yes_clear_{ns.project}", type="primary"):
+                                    if store.clear_namespace(ns.project):
+                                        st.session_state[confirm_clear_key] = False
+                                        st.success(f"Cleared memory for {ns.project}")
+                                        st.rerun()
+                                    else:
+                                        st.error("Failed to clear namespace")
+                            with c2:
+                                if st.button("Cancel", key=f"cancel_clear_{ns.project}"):
+                                    st.session_state[confirm_clear_key] = False
+                                    st.rerun()
+                        else:
+                            if st.button("Clear Memory", key=f"clear_{ns.project}"):
+                                st.session_state[confirm_clear_key] = True
                                 st.rerun()
-                            else:
-                                st.error("Failed to clear namespace")
             else:
                 st.info("No namespaces created yet")
 
@@ -1812,6 +1861,7 @@ with tab_cost:
 
     elif cost_mode == "Estimates":
         st.subheader("Cost Estimation")
+        project = st.session_state.current_project
 
         try:
             estimator = get_cost_estimator()
@@ -1910,6 +1960,7 @@ with tab_cost:
 
     elif cost_mode == "History":
         st.subheader("Cost History")
+        project = st.session_state.current_project
 
         try:
             tracker = get_cost_tracker(project)

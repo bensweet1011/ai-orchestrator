@@ -141,7 +141,9 @@ class BasePipeline:
 
             budget_mgr = get_budget_manager(self.project or "default")
             return budget_mgr.check_budget(estimated_cost)
-        except Exception:
+        except Exception as e:
+            import sys
+            print(f"Warning: Budget check failed: {e}", file=sys.stderr)
             return True, None
 
     def add_node(self, config: NodeConfig) -> "BasePipeline":

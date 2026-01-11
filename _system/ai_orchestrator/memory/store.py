@@ -533,7 +533,9 @@ class MemoryStore:
                             break
 
             return True
-        except Exception:
+        except Exception as e:
+            import sys
+            print(f"Warning: Failed to delete memory {memory_id}: {e}", file=sys.stderr)
             return False
 
     # =========================================================================
@@ -607,7 +609,9 @@ class MemoryStore:
                 shutil.rmtree(project_dir)
 
             return True
-        except Exception:
+        except Exception as e:
+            import sys
+            print(f"Warning: Failed to clear namespace {namespace}: {e}", file=sys.stderr)
             return False
 
 

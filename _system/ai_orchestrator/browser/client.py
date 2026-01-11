@@ -165,39 +165,41 @@ class PlaywrightClient:
         Args:
             save_credentials: If provided, save session state for this site identifier
         """
+        import sys
+
         # Save storage state if requested
         if save_credentials and self._context:
             try:
                 storage_state = self._context.storage_state()
                 self.credential_mgr.save_storage_state(save_credentials, storage_state)
-            except Exception:
-                pass  # Ignore save errors on shutdown
+            except Exception as e:
+                print(f"Warning: Failed to save credentials on shutdown: {e}", file=sys.stderr)
 
         # Mark session as ended
         if self._session:
             self._session.ended_at = datetime.utcnow().isoformat()
 
-        # Cleanup
+        # Cleanup with error logging
         if self._page:
             try:
                 self._page.close()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Warning: Failed to close page: {e}", file=sys.stderr)
         if self._context:
             try:
                 self._context.close()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Warning: Failed to close context: {e}", file=sys.stderr)
         if self._browser:
             try:
                 self._browser.close()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Warning: Failed to close browser: {e}", file=sys.stderr)
         if self._playwright:
             try:
                 self._playwright.stop()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Warning: Failed to stop playwright: {e}", file=sys.stderr)
 
         self._page = None
         self._context = None
