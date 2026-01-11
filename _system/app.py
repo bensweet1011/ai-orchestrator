@@ -85,6 +85,10 @@ if "browser_queue" not in st.session_state:
     st.session_state.browser_queue = None
 if "browser_history" not in st.session_state:
     st.session_state.browser_history = []
+if "deploy_registry" not in st.session_state:
+    st.session_state.deploy_registry = None
+if "deploy_feedback" not in st.session_state:
+    st.session_state.deploy_feedback = []
 
 
 def check_setup() -> tuple[bool, List[str]]:
@@ -298,8 +302,8 @@ with st.sidebar:
 # MAIN AREA - TABS
 # =============================================================================
 
-tab_chat, tab_pipelines, tab_autonomous, tab_memory, tab_cost, tab_integrations, tab_browser = st.tabs(
-    ["💬 Chat", "🔧 Pipelines", "🤖 Autonomous", "🧠 Memory", "💰 Cost", "🔗 Integrations", "🌐 Browser"]
+tab_chat, tab_pipelines, tab_autonomous, tab_memory, tab_cost, tab_integrations, tab_browser, tab_deploy = st.tabs(
+    ["💬 Chat", "🔧 Pipelines", "🤖 Autonomous", "🧠 Memory", "💰 Cost", "🔗 Integrations", "🌐 Browser", "🚀 Deploy"]
 )
 
 # =============================================================================
@@ -2785,3 +2789,522 @@ with tab_browser:
                     st.session_state.browser_history = []
                     st.success("History cleared")
                     st.rerun()
+
+# =============================================================================
+# DEPLOY TAB
+# =============================================================================
+
+with tab_deploy:
+    st.header("Cloud Deploy")
+    st.caption("Deploy products to Streamlit Cloud or Vercel")
+
+    from ai_orchestrator.config import get_integration_status, DEPLOY_REGISTRY_PATH
+
+    # Check integration status
+    integrations = get_integration_status()
+
+    # Status indicators
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        github_status = "Connected" if integrations.get("github") else "Not configured"
+        st.metric("GitHub", github_status)
+    with col2:
+        streamlit_status = "Ready" if integrations.get("streamlit_cloud") else "Need GitHub"
+        st.metric("Streamlit Cloud", streamlit_status)
+    with col3:
+        vercel_status = "Connected" if integrations.get("vercel") else "Not configured"
+        st.metric("Vercel", vercel_status)
+
+    st.divider()
+
+    # Subtab selection
+    deploy_subtab = st.radio(
+        "Section:",
+        ["Product Registry", "New Deployment", "GitHub", "Streamlit Cloud", "Vercel", "Iteration"],
+        horizontal=True,
+        key="deploy_subtab",
+    )
+
+    # -------------------------------------------------------------------------
+    # PRODUCT REGISTRY
+    # -------------------------------------------------------------------------
+    if deploy_subtab == "Product Registry":
+        st.subheader("Deployed Products")
+        st.caption("Track all your deployments across platforms")
+
+        from ai_orchestrator.deploy import (
+            get_product_registry,
+            ProductType,
+            ProductStatus,
+        )
+
+        registry = get_product_registry()
+        products = registry.list_products()
+        stats = registry.get_stats()
+
+        # Stats row
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Products", stats["total_products"])
+        with col2:
+            st.metric("Deployments", stats["total_deployments"])
+        with col3:
+            deployed = stats["by_status"].get("deployed", 0)
+            st.metric("Live", deployed)
+        with col4:
+            failed = stats["by_status"].get("failed", 0)
+            st.metric("Failed", failed)
+
+        st.divider()
+
+        # Product list
+        if products:
+            for product in products:
+                status_icon = "+" if product.status == "deployed" else "-" if product.status == "failed" else "*"
+                with st.expander(f"{status_icon} {product.name} ({product.product_type})"):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write(f"**GitHub:** {product.github_repo}")
+                        st.write(f"**Status:** {product.status}")
+                        st.write(f"**Created:** {product.created_at[:10]}")
+                    with col2:
+                        if product.deploy_url:
+                            st.write(f"**URL:** [{product.deploy_url}]({product.deploy_url})")
+                        st.write(f"**Updated:** {product.updated_at[:10]}")
+                        st.write(f"**Tags:** {', '.join(product.tags) if product.tags else 'None'}")
+
+                    if product.description:
+                        st.write(f"**Description:** {product.description}")
+
+                    # Deployment history
+                    history = registry.get_deployment_history(product.id, limit=5)
+                    if history:
+                        st.write("**Recent Deployments:**")
+                        for dep in history:
+                            st.caption(f"  {dep.timestamp[:16]} - {dep.status}")
+        else:
+            st.info("No products registered yet. Create a new deployment to get started.")
+
+    # -------------------------------------------------------------------------
+    # NEW DEPLOYMENT
+    # -------------------------------------------------------------------------
+    elif deploy_subtab == "New Deployment":
+        st.subheader("Create New Deployment")
+
+        from ai_orchestrator.deploy import (
+            get_product_registry,
+            ProductType,
+            create_nextjs_project,
+            DesignSystem,
+        )
+        from ai_orchestrator.integrations import (
+            StreamlitAppConfig,
+            get_streamlit_cloud_client,
+        )
+
+        # Deployment path selection
+        deploy_path = st.radio(
+            "Deployment Path:",
+            ["Streamlit Cloud (Functional Tools)", "Vercel (Professional Products)"],
+            horizontal=True,
+            key="deploy_path",
+        )
+
+        st.divider()
+
+        if "Streamlit" in deploy_path:
+            st.write("**Deploy to Streamlit Cloud**")
+            st.caption("Perfect for data apps, internal tools, and quick prototypes")
+
+            name = st.text_input("App Name:", placeholder="my-awesome-app", key="streamlit_name")
+            description = st.text_area("Description:", placeholder="What does this app do?", key="streamlit_desc")
+            github_repo = st.text_input("GitHub Repository:", placeholder="username/repo", key="streamlit_repo")
+            main_file = st.text_input("Main File:", value="app.py", key="streamlit_main")
+
+            if st.button("Prepare Deployment", type="primary", key="streamlit_deploy"):
+                if name and github_repo:
+                    try:
+                        client = get_streamlit_cloud_client()
+
+                        # Generate config files
+                        config = StreamlitAppConfig(
+                            name=name,
+                            github_repo=github_repo,
+                            main_file=main_file,
+                        )
+                        files = client.prepare_deployment(config)
+
+                        # Register in product registry
+                        registry = get_product_registry()
+                        product = registry.register_product(
+                            name=name,
+                            product_type=ProductType.STREAMLIT,
+                            github_repo=github_repo,
+                            description=description,
+                            tags=["streamlit", "functional"],
+                        )
+
+                        # Register deployment
+                        deployment = client.register_deployment(
+                            name=name,
+                            github_repo=github_repo,
+                            main_file=main_file,
+                        )
+
+                        st.success(f"Deployment prepared! Product ID: {product.id}")
+                        st.info("Files to push to GitHub:")
+                        for filepath in files:
+                            st.code(filepath)
+
+                        st.write(client.get_deployment_instructions(github_repo))
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+                else:
+                    st.warning("Name and GitHub repository are required")
+
+        else:
+            st.write("**Deploy to Vercel**")
+            st.caption("For professional, polished web applications with Next.js")
+
+            name = st.text_input("Project Name:", placeholder="my-product", key="vercel_name")
+            description = st.text_area("Description:", placeholder="Product description", key="vercel_desc")
+            github_repo = st.text_input("GitHub Repository:", placeholder="username/repo", key="vercel_repo")
+
+            use_template = st.checkbox("Generate Next.js project from template", value=True, key="use_template")
+
+            if st.button("Prepare Deployment", type="primary", key="vercel_deploy"):
+                if name:
+                    try:
+                        registry = get_product_registry()
+
+                        if use_template:
+                            # Generate Next.js project
+                            files = create_nextjs_project(
+                                name=name,
+                                description=description,
+                            )
+
+                            st.success(f"Generated {len(files)} files for Next.js project")
+
+                            # Show generated files
+                            with st.expander("Generated Files"):
+                                for filepath in sorted(files.keys()):
+                                    st.code(filepath)
+
+                        # Register product
+                        product = registry.register_product(
+                            name=name,
+                            product_type=ProductType.VERCEL,
+                            github_repo=github_repo or "pending",
+                            description=description,
+                            tags=["vercel", "professional", "nextjs"],
+                        )
+
+                        st.success(f"Product registered! ID: {product.id}")
+
+                        if integrations.get("vercel"):
+                            st.info("Vercel token configured. You can deploy via the Vercel section.")
+                        else:
+                            st.warning("Configure VERCEL_TOKEN to enable direct deployment.")
+
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+                else:
+                    st.warning("Project name is required")
+
+    # -------------------------------------------------------------------------
+    # GITHUB
+    # -------------------------------------------------------------------------
+    elif deploy_subtab == "GitHub":
+        st.subheader("GitHub Repository Management")
+
+        if not integrations.get("github"):
+            st.warning("GitHub not configured. Set GITHUB_TOKEN environment variable.")
+            st.code("export GITHUB_TOKEN=ghp_your_token_here")
+        else:
+            from ai_orchestrator.integrations import get_github_client
+
+            try:
+                client = get_github_client()
+                repos = client.list_repositories(limit=20)
+
+                st.write(f"**{len(repos)} repositories found**")
+
+                for repo in repos:
+                    with st.expander(f"{repo.name} - {repo.description[:50] if repo.description else 'No description'}"):
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.write(f"**Full Name:** {repo.full_name}")
+                            st.write(f"**Default Branch:** {repo.default_branch}")
+                            st.write(f"**Private:** {'Yes' if repo.private else 'No'}")
+                        with col2:
+                            st.write(f"**URL:** [{repo.url}]({repo.url})")
+                            st.write(f"**Clone:** `{repo.clone_url}`")
+                            st.write(f"**Updated:** {repo.updated_at[:10] if repo.updated_at else 'N/A'}")
+
+                st.divider()
+
+                # Create new repository
+                st.subheader("Create New Repository")
+                new_repo_name = st.text_input("Repository Name:", key="new_repo_name")
+                new_repo_desc = st.text_input("Description:", key="new_repo_desc")
+                new_repo_private = st.checkbox("Private", key="new_repo_private")
+
+                if st.button("Create Repository", key="create_repo"):
+                    if new_repo_name:
+                        try:
+                            result = client.create_repository(
+                                name=new_repo_name,
+                                description=new_repo_desc,
+                                private=new_repo_private,
+                            )
+                            st.success(f"Created: {result.full_name}")
+                            st.write(f"URL: [{result.url}]({result.url})")
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+                    else:
+                        st.warning("Repository name required")
+
+            except Exception as e:
+                st.error(f"Error connecting to GitHub: {e}")
+
+    # -------------------------------------------------------------------------
+    # STREAMLIT CLOUD
+    # -------------------------------------------------------------------------
+    elif deploy_subtab == "Streamlit Cloud":
+        st.subheader("Streamlit Cloud Deployments")
+
+        from ai_orchestrator.integrations import get_streamlit_cloud_client
+
+        client = get_streamlit_cloud_client()
+        deployments = client.list_deployments()
+
+        if deployments:
+            for dep in deployments:
+                status_icon = "+" if dep.status == "deployed" else "-" if dep.status == "failed" else "*"
+                with st.expander(f"{status_icon} {dep.name}"):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write(f"**Repository:** {dep.github_repo}")
+                        st.write(f"**Branch:** {dep.branch}")
+                        st.write(f"**Main File:** {dep.main_file}")
+                    with col2:
+                        st.write(f"**Status:** {dep.status}")
+                        if dep.url:
+                            st.write(f"**URL:** [{dep.url}]({dep.url})")
+                        st.write(f"**Updated:** {dep.updated_at[:16]}")
+
+                    if dep.error:
+                        st.error(f"Error: {dep.error}")
+
+                    # Update status
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        if st.button("Mark Deployed", key=f"mark_deployed_{dep.id}"):
+                            client.update_deployment_status(dep.id, "deployed")
+                            st.success("Marked as deployed")
+                            st.rerun()
+                    with col2:
+                        if st.button("Mark Failed", key=f"mark_failed_{dep.id}"):
+                            client.update_deployment_status(dep.id, "failed")
+                            st.success("Marked as failed")
+                            st.rerun()
+                    with col3:
+                        if st.button("Delete", key=f"delete_dep_{dep.id}"):
+                            client.delete_deployment(dep.id)
+                            st.success("Deleted")
+                            st.rerun()
+        else:
+            st.info("No Streamlit deployments registered. Create one in 'New Deployment'.")
+
+        st.divider()
+        st.subheader("Deployment Instructions")
+        st.markdown("""
+        1. Push your code to GitHub
+        2. Go to [share.streamlit.io](https://share.streamlit.io)
+        3. Select your repository and main file
+        4. Click Deploy
+        5. Update status here once deployed
+        """)
+
+    # -------------------------------------------------------------------------
+    # VERCEL
+    # -------------------------------------------------------------------------
+    elif deploy_subtab == "Vercel":
+        st.subheader("Vercel Deployments")
+
+        if not integrations.get("vercel"):
+            st.warning("Vercel not configured. Set VERCEL_TOKEN environment variable.")
+            st.code("export VERCEL_TOKEN=your_token_here")
+            st.markdown("Get your token at [vercel.com/account/tokens](https://vercel.com/account/tokens)")
+        else:
+            from ai_orchestrator.integrations import get_vercel_client
+
+            try:
+                client = get_vercel_client()
+                projects = client.list_projects()
+
+                st.write(f"**{len(projects)} Vercel projects**")
+
+                for proj in projects:
+                    with st.expander(f"{proj.name} ({proj.framework or 'unknown'})"):
+                        st.write(f"**URL:** [{proj.url}]({proj.url})")
+                        st.write(f"**Created:** {proj.created_at[:10]}")
+
+                        if proj.env_vars:
+                            st.write(f"**Env Vars:** {', '.join(proj.env_vars)}")
+
+                        # Get recent deployments
+                        try:
+                            deployments = client.list_deployments(project_id=proj.id, limit=3)
+                            if deployments:
+                                st.write("**Recent Deployments:**")
+                                for dep in deployments:
+                                    status_icon = "+" if dep.state == "READY" else "-" if dep.state == "ERROR" else "*"
+                                    st.caption(f"  {status_icon} {dep.state} - {dep.created_at[:16]}")
+                        except Exception:
+                            pass
+
+                st.divider()
+
+                # Deploy from GitHub
+                st.subheader("Deploy from GitHub")
+                deploy_project = st.selectbox(
+                    "Select Project:",
+                    options=[p.name for p in projects] if projects else [],
+                    key="vercel_deploy_project",
+                )
+                deploy_ref = st.text_input("Branch/Ref:", value="main", key="vercel_deploy_ref")
+
+                if st.button("Trigger Deployment", type="primary", key="trigger_vercel"):
+                    if deploy_project:
+                        try:
+                            proj = next(p for p in projects if p.name == deploy_project)
+                            result = client.deploy_from_github(proj.id, deploy_ref)
+                            st.success(f"Deployment started! ID: {result.id}")
+                            st.info(f"Status: {result.state}")
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+
+            except Exception as e:
+                st.error(f"Error connecting to Vercel: {e}")
+
+    # -------------------------------------------------------------------------
+    # ITERATION
+    # -------------------------------------------------------------------------
+    else:
+        st.subheader("Feedback & Iteration")
+        st.caption("Collect feedback and track improvements")
+
+        from ai_orchestrator.deploy import (
+            get_product_registry,
+            get_iteration_loop,
+            FeedbackType,
+            FeedbackPriority,
+        )
+
+        registry = get_product_registry()
+        iteration = get_iteration_loop()
+        products = registry.list_products()
+
+        if not products:
+            st.info("No products registered. Create a deployment first.")
+        else:
+            # Product selector
+            selected_product = st.selectbox(
+                "Select Product:",
+                options=[p.name for p in products],
+                key="iteration_product",
+            )
+
+            product = next((p for p in products if p.name == selected_product), None)
+
+            if product:
+                # Stats for this product
+                stats = iteration.get_stats(product.id)
+
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Feedback", stats["total_feedback"])
+                with col2:
+                    st.metric("Unresolved", stats["unresolved_feedback"])
+                with col3:
+                    st.metric("Iterations", stats["completed_iterations"])
+
+                st.divider()
+
+                # Add feedback
+                st.subheader("Add Feedback")
+
+                feedback_type = st.selectbox(
+                    "Type:",
+                    options=["bug", "feature", "ux", "performance", "content", "general"],
+                    key="feedback_type",
+                )
+                feedback_priority = st.selectbox(
+                    "Priority:",
+                    options=["low", "medium", "high", "critical"],
+                    index=1,
+                    key="feedback_priority",
+                )
+                feedback_content = st.text_area(
+                    "Feedback:",
+                    placeholder="Describe the issue or suggestion...",
+                    key="feedback_content",
+                )
+
+                if st.button("Submit Feedback", type="primary", key="submit_feedback"):
+                    if feedback_content:
+                        entry = iteration.record_feedback(
+                            product_id=product.id,
+                            content=feedback_content,
+                            feedback_type=FeedbackType(feedback_type),
+                            priority=FeedbackPriority(feedback_priority),
+                            source="manual",
+                        )
+                        st.success(f"Feedback recorded! ID: {entry.id}")
+                        st.rerun()
+                    else:
+                        st.warning("Feedback content required")
+
+                st.divider()
+
+                # View unresolved feedback
+                st.subheader("Unresolved Feedback")
+                unresolved = iteration.get_unresolved_feedback(product.id)
+
+                if unresolved:
+                    for fb in unresolved:
+                        with st.expander(f"[{fb.feedback_type}] {fb.content[:50]}..."):
+                            st.write(f"**Priority:** {fb.priority}")
+                            st.write(f"**Created:** {fb.created_at[:16]}")
+                            st.write(f"**Content:** {fb.content}")
+
+                            if st.button("Resolve", key=f"resolve_{fb.id}"):
+                                iteration.resolve_feedback(fb.id, "Resolved via UI")
+                                st.success("Resolved!")
+                                st.rerun()
+                else:
+                    st.success("No unresolved feedback!")
+
+                st.divider()
+
+                # Generate improvement plan
+                st.subheader("Generate Improvement Plan")
+
+                version = st.text_input("Version:", placeholder="1.1.0", key="plan_version")
+
+                if st.button("Generate Plan", key="generate_plan"):
+                    if version:
+                        plan = iteration.generate_improvement_plan(product.id, version)
+                        st.success(f"Plan generated! ID: {plan.id}")
+
+                        if plan.items:
+                            st.write("**Improvement Items:**")
+                            for item in plan.items:
+                                st.write(f"- **{item.title}** (effort: {item.effort}, impact: {item.impact})")
+                                st.caption(f"  {item.description[:100]}...")
+                        else:
+                            st.info("No items generated (no unresolved feedback)")
+                    else:
+                        st.warning("Version number required")

@@ -20,6 +20,7 @@ class NodeType(Enum):
     TRANSFORM = "transform"  # Pure Python transformation
     AGGREGATE = "aggregate"  # Combines multiple outputs
     BROWSER = "browser"  # Browser automation with Playwright
+    GITHUB = "github"  # GitHub repository operations
 
 
 @dataclass
@@ -62,6 +63,15 @@ class NodeConfig:
     browser_site_credentials: Optional[str] = None
     browser_take_screenshots: bool = True
 
+    # GitHub configuration (for GITHUB nodes)
+    github_action: Optional[str] = None  # create_repo, push_file, create_branch, trigger_workflow
+    github_repo: Optional[str] = None  # Repository name (owner/repo or just repo)
+    github_branch: str = "main"
+    github_path: Optional[str] = None  # File path for push_file
+    github_content: Optional[str] = None  # Content for push_file
+    github_commit_message: Optional[str] = None
+    github_workflow_id: Optional[str] = None  # For trigger_workflow
+
     # Metadata
     description: str = ""
 
@@ -89,6 +99,11 @@ class NodeConfig:
                 f"Node '{self.name}': Browser nodes require 'browser_actions'"
             )
 
+        if self.node_type == NodeType.GITHUB and not self.github_action:
+            raise ValueError(
+                f"Node '{self.name}': GitHub nodes require 'github_action'"
+            )
+
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary (excludes functions)."""
         return {
@@ -110,6 +125,13 @@ class NodeConfig:
             "browser_dry_run": self.browser_dry_run,
             "browser_site_credentials": self.browser_site_credentials,
             "browser_take_screenshots": self.browser_take_screenshots,
+            "github_action": self.github_action,
+            "github_repo": self.github_repo,
+            "github_branch": self.github_branch,
+            "github_path": self.github_path,
+            "github_content": self.github_content,
+            "github_commit_message": self.github_commit_message,
+            "github_workflow_id": self.github_workflow_id,
             "description": self.description,
         }
 
@@ -510,6 +532,144 @@ def create_browser_node(
     return node_fn
 
 
+def create_github_node(
+    config: NodeConfig,
+) -> Callable[[PipelineState], PipelineState]:
+    """
+    Create a GitHub operations node.
+
+    Args:
+        config: Node configuration with GitHub action settings
+
+    Returns:
+        Function that executes GitHub action and updates state
+    """
+
+    def node_fn(state: PipelineState) -> PipelineState:
+        """Execute GitHub action."""
+        from ..integrations.github import get_github_client
+
+        start_time = time.time()
+
+        try:
+            client = get_github_client()
+            action = config.github_action
+            result_content = ""
+
+            if action == "create_repo":
+                # Create repository
+                repo_name = config.github_repo or state.get("custom", {}).get("repo_name", "new-repo")
+                description = state.get("custom", {}).get("repo_description", "")
+
+                result = client.create_repository(
+                    name=repo_name,
+                    description=description,
+                    private=state.get("custom", {}).get("private", False),
+                )
+                result_content = f"Created repository: {result.full_name}\nURL: {result.url}"
+
+            elif action == "push_file":
+                # Push file to repository
+                repo = config.github_repo
+                path = config.github_path or state.get("custom", {}).get("file_path", "")
+                content = config.github_content or state.get("custom", {}).get("file_content", "")
+                message = config.github_commit_message or f"Update {path}"
+                branch = config.github_branch
+
+                result = client.push_file(
+                    repo_name=repo,
+                    path=path,
+                    content=content,
+                    message=message,
+                    branch=branch,
+                )
+                result_content = f"Pushed file: {path}\nCommit: {result.sha[:8]}\nURL: {result.url}"
+
+            elif action == "create_branch":
+                # Create new branch
+                repo = config.github_repo
+                branch_name = state.get("custom", {}).get("new_branch", "feature-branch")
+                from_branch = config.github_branch
+
+                result = client.create_branch(
+                    repo_name=repo,
+                    branch_name=branch_name,
+                    from_branch=from_branch,
+                )
+                result_content = f"Created branch: {result.name}\nSHA: {result.sha}"
+
+            elif action == "trigger_workflow":
+                # Trigger GitHub Action workflow
+                repo = config.github_repo
+                workflow_id = config.github_workflow_id or state.get("custom", {}).get("workflow_id", "")
+                ref = config.github_branch
+                inputs = state.get("custom", {}).get("workflow_inputs", {})
+
+                result = client.trigger_workflow(
+                    repo_name=repo,
+                    workflow_id=workflow_id,
+                    ref=ref,
+                    inputs=inputs,
+                )
+                result_content = f"Triggered workflow: {result.name}\nStatus: {result.status}\nURL: {result.url}"
+
+            elif action == "get_repo":
+                # Get repository info
+                repo = config.github_repo
+                result = client.get_repository(repo)
+                result_content = f"Repository: {result.full_name}\nDescription: {result.description}\nURL: {result.url}"
+
+            elif action == "list_repos":
+                # List repositories
+                repos = client.list_repositories(limit=10)
+                result_content = "Repositories:\n" + "\n".join(
+                    f"- {r.full_name}: {r.description[:50] if r.description else 'No description'}"
+                    for r in repos
+                )
+
+            else:
+                raise ValueError(f"Unknown GitHub action: {action}")
+
+            latency_ms = int((time.time() - start_time) * 1000)
+
+            output = NodeOutput(
+                content=result_content,
+                model="github",
+                provider="github",
+                latency_ms=latency_ms,
+                tokens_used=None,
+            )
+
+            outputs = dict(state.get("outputs", {}))
+            outputs[config.output_key] = output
+
+            return {
+                **state,
+                "outputs": outputs,
+                "current_node": config.name,
+                "final_output": result_content,
+            }
+
+        except Exception as e:
+            latency_ms = int((time.time() - start_time) * 1000)
+            errors = list(state.get("errors", []))
+            errors.append(
+                {
+                    "node": config.name,
+                    "error": str(e),
+                    "timestamp": datetime.utcnow().isoformat(),
+                }
+            )
+
+            return {
+                **state,
+                "current_node": config.name,
+                "errors": errors,
+            }
+
+    return node_fn
+
+
 def create_node(config: NodeConfig) -> Callable[[PipelineState], PipelineState]:
     """
     Factory function to create appropriate node based on type.
@@ -528,6 +688,8 @@ def create_node(config: NodeConfig) -> Callable[[PipelineState], PipelineState]:
         return create_transform_node(config)
     elif config.node_type == NodeType.BROWSER:
         return create_browser_node(config)
+    elif config.node_type == NodeType.GITHUB:
+        return create_github_node(config)
     else:
         raise ValueError(f"Unknown node type: {config.node_type}")
 

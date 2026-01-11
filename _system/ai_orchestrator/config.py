@@ -99,6 +99,8 @@ def get_api_keys() -> Dict[str, Optional[str]]:
         "xai": os.environ.get("XAI_API_KEY"),
         "perplexity": os.environ.get("PERPLEXITY_API_KEY"),
         "pinecone": os.environ.get("PINECONE_API_KEY"),
+        "github": os.environ.get("GITHUB_TOKEN"),
+        "vercel": os.environ.get("VERCEL_TOKEN"),
     }
 
 
@@ -160,6 +162,11 @@ BROWSER_QUEUE_DIR = BROWSER_DATA_DIR / "queue"
 BROWSER_MIN_DELAY = 3.0
 BROWSER_MAX_DELAY = 5.0
 
+# Deploy settings
+DEPLOY_REGISTRY_PATH = SYSTEM_DIR / "deploy_registry.json"
+DEPLOY_TEMPLATES_DIR = TEMPLATES_DIR / "deploy"
+DEPLOY_TEMPLATES_DIR.mkdir(exist_ok=True)
+
 
 def get_integration_status() -> Dict[str, bool]:
     """Check which integrations are configured."""
@@ -168,4 +175,7 @@ def get_integration_status() -> Dict[str, bool]:
         "google_docs": GOOGLE_CREDENTIALS_PATH.exists(),
         "browser": True,  # Always available (no external API needed)
         "browser_credentials": bool(os.environ.get("BROWSER_MASTER_KEY")),
+        "github": bool(os.environ.get("GITHUB_TOKEN")),
+        "vercel": bool(os.environ.get("VERCEL_TOKEN")),
+        "streamlit_cloud": bool(os.environ.get("GITHUB_TOKEN")),  # Uses GitHub for deployment
     }
