@@ -150,10 +150,22 @@ EMBEDDING_DIMENSIONS = 1024  # Must match Pinecone index
 GOOGLE_CREDENTIALS_PATH = SYSTEM_DIR / "google_credentials.json"
 GOOGLE_TOKEN_PATH = SYSTEM_DIR / "google_token.json"
 
+# Browser automation settings
+BROWSER_DATA_DIR = TEMPLATES_DIR / "browser"
+BROWSER_SCREENSHOTS_DIR = BROWSER_DATA_DIR / "screenshots"
+BROWSER_CREDENTIALS_DIR = BROWSER_DATA_DIR / "credentials"
+BROWSER_QUEUE_DIR = BROWSER_DATA_DIR / "queue"
+
+# Default rate limits (seconds) - enforces human-like delays
+BROWSER_MIN_DELAY = 3.0
+BROWSER_MAX_DELAY = 5.0
+
 
 def get_integration_status() -> Dict[str, bool]:
     """Check which integrations are configured."""
     return {
         "notion": bool(os.environ.get("NOTION_API_KEY")),
         "google_docs": GOOGLE_CREDENTIALS_PATH.exists(),
+        "browser": True,  # Always available (no external API needed)
+        "browser_credentials": bool(os.environ.get("BROWSER_MASTER_KEY")),
     }

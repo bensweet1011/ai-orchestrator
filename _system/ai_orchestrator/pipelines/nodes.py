@@ -19,6 +19,7 @@ class NodeType(Enum):
     CONDITIONAL = "conditional"  # Routes based on condition
     TRANSFORM = "transform"  # Pure Python transformation
     AGGREGATE = "aggregate"  # Combines multiple outputs
+    BROWSER = "browser"  # Browser automation with Playwright
 
 
 @dataclass
@@ -54,6 +55,13 @@ class NodeConfig:
     memory_context_k: int = 3  # Number of past results to inject
     memory_min_score: float = 0.5  # Minimum similarity score for context
 
+    # Browser automation configuration (for BROWSER nodes)
+    browser_actions: List[Dict[str, Any]] = field(default_factory=list)
+    browser_headless: bool = True
+    browser_dry_run: bool = True  # Safety: simulate submit/destructive actions
+    browser_site_credentials: Optional[str] = None
+    browser_take_screenshots: bool = True
+
     # Metadata
     description: str = ""
 
@@ -76,6 +84,11 @@ class NodeConfig:
                 f"Node '{self.name}': Transform nodes require 'transform_fn'"
             )
 
+        if self.node_type == NodeType.BROWSER and not self.browser_actions:
+            raise ValueError(
+                f"Node '{self.name}': Browser nodes require 'browser_actions'"
+            )
+
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary (excludes functions)."""
         return {
@@ -92,6 +105,11 @@ class NodeConfig:
             "use_memory": self.use_memory,
             "memory_context_k": self.memory_context_k,
             "memory_min_score": self.memory_min_score,
+            "browser_actions": self.browser_actions,
+            "browser_headless": self.browser_headless,
+            "browser_dry_run": self.browser_dry_run,
+            "browser_site_credentials": self.browser_site_credentials,
+            "browser_take_screenshots": self.browser_take_screenshots,
             "description": self.description,
         }
 
@@ -384,6 +402,114 @@ def create_aggregate_node(
     return node_fn
 
 
+def create_browser_node(
+    config: NodeConfig,
+) -> Callable[[PipelineState], PipelineState]:
+    """
+    Create a browser automation node.
+
+    Args:
+        config: Node configuration with browser actions
+
+    Returns:
+        Function that executes browser actions and updates state
+    """
+
+    def node_fn(state: PipelineState) -> PipelineState:
+        """Execute browser actions."""
+        from ..browser import (
+            get_playwright_client,
+            BrowserAction,
+            ActionCategory,
+            ApprovalStatus,
+        )
+
+        start_time = time.time()
+
+        try:
+            client = get_playwright_client(
+                headless=config.browser_headless,
+                dry_run=config.browser_dry_run,
+            )
+
+            # Start session if not active
+            if not client.is_active:
+                client.start_session(
+                    site_credentials=config.browser_site_credentials
+                )
+
+            results = []
+            extracted_data = []
+            screenshots = []
+
+            for action_def in config.browser_actions:
+                # Create action from definition
+                action = BrowserAction.from_dict(action_def)
+
+                # Auto-approve read-only actions
+                if action.category == ActionCategory.READ_ONLY:
+                    action.approval_status = ApprovalStatus.AUTO_APPROVED
+
+                result = client.execute_action(
+                    action,
+                    take_screenshots=config.browser_take_screenshots,
+                )
+                results.append(result.to_dict())
+
+                if result.extracted_data:
+                    extracted_data.append(result.extracted_data)
+                if result.screenshot_path:
+                    screenshots.append(result.screenshot_path)
+
+            latency_ms = int((time.time() - start_time) * 1000)
+
+            # Compile output
+            content = "\n\n".join(extracted_data) if extracted_data else "Browser actions completed"
+
+            output = NodeOutput(
+                content=content,
+                model="browser",
+                provider="playwright",
+                latency_ms=latency_ms,
+                tokens_used=None,
+            )
+
+            outputs = dict(state.get("outputs", {}))
+            outputs[config.output_key] = output
+
+            # Store browser-specific data in custom
+            custom = dict(state.get("custom", {}))
+            custom["browser_results"] = results
+            custom["browser_screenshots"] = screenshots
+
+            return {
+                **state,
+                "outputs": outputs,
+                "current_node": config.name,
+                "final_output": content,
+                "custom": custom,
+            }
+
+        except Exception as e:
+            latency_ms = int((time.time() - start_time) * 1000)
+            errors = list(state.get("errors", []))
+            errors.append(
+                {
+                    "node": config.name,
+                    "error": str(e),
+                    "timestamp": datetime.utcnow().isoformat(),
+                }
+            )
+
+            return {
+                **state,
+                "current_node": config.name,
+                "errors": errors,
+            }
+
+    return node_fn
+
+
 def create_node(config: NodeConfig) -> Callable[[PipelineState], PipelineState]:
     """
     Factory function to create appropriate node based on type.
@@ -400,6 +526,8 @@ def create_node(config: NodeConfig) -> Callable[[PipelineState], PipelineState]:
         return create_conditional_node(config)
     elif config.node_type == NodeType.TRANSFORM:
         return create_transform_node(config)
+    elif config.node_type == NodeType.BROWSER:
+        return create_browser_node(config)
     else:
         raise ValueError(f"Unknown node type: {config.node_type}")
 

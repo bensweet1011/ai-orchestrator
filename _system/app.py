@@ -79,6 +79,12 @@ if "pipeline_results" not in st.session_state:
     st.session_state.pipeline_results = None
 if "autonomous_result" not in st.session_state:
     st.session_state.autonomous_result = None
+if "browser_session" not in st.session_state:
+    st.session_state.browser_session = None
+if "browser_queue" not in st.session_state:
+    st.session_state.browser_queue = None
+if "browser_history" not in st.session_state:
+    st.session_state.browser_history = []
 
 
 def check_setup() -> tuple[bool, List[str]]:
@@ -292,8 +298,8 @@ with st.sidebar:
 # MAIN AREA - TABS
 # =============================================================================
 
-tab_chat, tab_pipelines, tab_autonomous, tab_memory, tab_cost, tab_integrations = st.tabs(
-    ["💬 Chat", "🔧 Pipelines", "🤖 Autonomous", "🧠 Memory", "💰 Cost", "🔗 Integrations"]
+tab_chat, tab_pipelines, tab_autonomous, tab_memory, tab_cost, tab_integrations, tab_browser = st.tabs(
+    ["💬 Chat", "🔧 Pipelines", "🤖 Autonomous", "🧠 Memory", "💰 Cost", "🔗 Integrations", "🌐 Browser"]
 )
 
 # =============================================================================
@@ -2334,3 +2340,448 @@ with tab_integrations:
 
             except Exception as e:
                 st.error(f"Failed to initialize Google Docs client: {e}")
+
+# =============================================================================
+# BROWSER ACTIONS TAB
+# =============================================================================
+
+with tab_browser:
+    st.header("Browser Automation")
+    st.caption("Automate web interactions with Playwright - Human-in-the-loop safety")
+
+    # Check if playwright is available
+    try:
+        from ai_orchestrator.browser import (
+            get_playwright_client,
+            BrowserAction,
+            BrowserActionType,
+            ActionCategory,
+            ApprovalStatus,
+            ActionQueue,
+            CredentialManager,
+            create_action,
+        )
+        from ai_orchestrator.config import BROWSER_DATA_DIR, BROWSER_QUEUE_DIR
+
+        playwright_available = True
+    except ImportError as e:
+        playwright_available = False
+        st.error(
+            f"Browser automation not available. Install dependencies: "
+            f"`pip install playwright cryptography && playwright install chromium`"
+        )
+        st.stop()
+
+    if playwright_available:
+        browser_subtab = st.radio(
+            "Mode:",
+            ["Quick Actions", "Action Queue", "Credentials", "History"],
+            horizontal=True,
+            key="browser_subtab",
+        )
+
+        st.divider()
+
+        # -------------------------------------------------------------------------
+        # QUICK ACTIONS
+        # -------------------------------------------------------------------------
+        if browser_subtab == "Quick Actions":
+            st.subheader("Execute Browser Actions")
+
+            # Configuration
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                headless = st.checkbox("Headless mode", value=True, key="browser_headless")
+            with col2:
+                dry_run = st.checkbox("Dry run (simulate submit)", value=True, key="browser_dry_run")
+            with col3:
+                take_screenshots = st.checkbox("Capture screenshots", value=True, key="browser_screenshots")
+
+            st.divider()
+
+            # Action builder
+            action_type = st.selectbox(
+                "Action type:",
+                options=[t.value for t in BrowserActionType],
+                format_func=lambda x: {
+                    "navigate": "Navigate - Go to URL",
+                    "fill": "Fill - Enter text in field",
+                    "click": "Click - Click element",
+                    "extract": "Extract - Get text from element",
+                    "screenshot": "Screenshot - Capture page",
+                    "wait": "Wait - Wait for element",
+                    "select": "Select - Choose from dropdown",
+                    "hover": "Hover - Hover over element",
+                    "scroll": "Scroll - Scroll page",
+                    "execute_js": "Execute JS - Run JavaScript",
+                }.get(x, x),
+                key="browser_action_type",
+            )
+
+            # Action-specific inputs
+            target_url = None
+            target_selector = None
+            value = None
+
+            if action_type == "navigate":
+                target_url = st.text_input("URL:", placeholder="https://example.com", key="browser_url")
+            elif action_type in ["fill", "select"]:
+                target_selector = st.text_input(
+                    "Selector (CSS/XPath):",
+                    placeholder="#email, input[name='email']",
+                    key="browser_selector",
+                )
+                value = st.text_input("Value to enter:", key="browser_value")
+            elif action_type in ["click", "extract", "wait", "hover"]:
+                target_selector = st.text_input(
+                    "Selector (CSS/XPath):",
+                    placeholder="button[type='submit']",
+                    key="browser_selector2",
+                )
+            elif action_type == "execute_js":
+                value = st.text_area("JavaScript code:", key="browser_js", height=100)
+            elif action_type == "scroll":
+                target_selector = st.text_input(
+                    "Selector (optional, scrolls to element):",
+                    placeholder="Leave empty to scroll page",
+                    key="browser_scroll_selector",
+                )
+
+            description = st.text_input(
+                "Description (optional):",
+                placeholder="What this action does",
+                key="browser_desc",
+            )
+
+            # Show category info
+            if action_type in ["navigate", "extract", "screenshot", "wait", "hover", "scroll"]:
+                st.success("Read-only action - auto-approved")
+            elif action_type in ["fill", "select"]:
+                st.info("Input action - reversible")
+            elif action_type in ["click", "execute_js"]:
+                st.warning("Submit action - requires approval if dry_run is off")
+
+            if st.button("Execute Action", type="primary", key="browser_execute"):
+                # Validation
+                valid = True
+                if action_type == "navigate" and not target_url:
+                    st.error("URL is required for navigate action")
+                    valid = False
+                elif action_type in ["fill", "click", "extract", "wait", "select", "hover"] and not target_selector:
+                    st.error("Selector is required for this action")
+                    valid = False
+
+                if valid:
+                    try:
+                        client = get_playwright_client(headless=headless, dry_run=dry_run)
+
+                        # Start session if needed
+                        if not client.is_active:
+                            with st.spinner("Starting browser session..."):
+                                session = client.start_session()
+                                st.session_state.browser_session = session.to_dict()
+
+                        # Create action
+                        action = create_action(
+                            action_type=action_type,
+                            target_selector=target_selector or None,
+                            target_url=target_url or None,
+                            value=value or None,
+                            description=description or f"{action_type} action",
+                        )
+
+                        # Auto-approve for execution
+                        action.approval_status = ApprovalStatus.APPROVED
+
+                        with st.spinner("Executing action..."):
+                            result = client.execute_action(action, take_screenshots=take_screenshots)
+
+                        # Store in history
+                        st.session_state.browser_history.append({
+                            "action": action.to_dict(),
+                            "result": result.to_dict(),
+                            "timestamp": result.timestamp,
+                        })
+
+                        if result.success:
+                            st.success(f"Action completed in {result.latency_ms}ms")
+
+                            if result.extracted_data:
+                                st.subheader("Extracted Data")
+                                st.text_area(
+                                    "Content:",
+                                    result.extracted_data,
+                                    height=200,
+                                    disabled=True,
+                                    key="browser_result_data",
+                                )
+
+                            if result.screenshot_path:
+                                st.subheader("Screenshot")
+                                try:
+                                    st.image(result.screenshot_path)
+                                except Exception:
+                                    st.caption(f"Screenshot saved: {result.screenshot_path}")
+
+                            if result.page_url:
+                                st.write(f"**Current URL:** {result.page_url}")
+                        else:
+                            st.error(f"Action failed: {result.error}")
+                            if result.error_screenshot_path:
+                                try:
+                                    st.image(result.error_screenshot_path, caption="Error state")
+                                except Exception:
+                                    pass
+
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+
+            # Session control
+            st.divider()
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("End Session", key="browser_end_session"):
+                    if st.session_state.browser_session:
+                        try:
+                            client = get_playwright_client()
+                            client.end_session()
+                            st.session_state.browser_session = None
+                            st.success("Session ended")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error ending session: {e}")
+            with col2:
+                if st.session_state.browser_session:
+                    session_id = st.session_state.browser_session.get("session_id", "unknown")
+                    st.info(f"Active session: {session_id}")
+                else:
+                    st.caption("No active session")
+
+        # -------------------------------------------------------------------------
+        # ACTION QUEUE
+        # -------------------------------------------------------------------------
+        elif browser_subtab == "Action Queue":
+            st.subheader("Action Approval Queue")
+            st.caption("Review and approve actions before execution")
+
+            BROWSER_QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+
+            # Initialize or get queue
+            if st.session_state.browser_queue is None:
+                st.session_state.browser_queue = ActionQueue(BROWSER_QUEUE_DIR)
+
+            queue = st.session_state.browser_queue
+            pending = queue.get_pending()
+            approved = queue.get_approved()
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Pending Approval", len(pending))
+            with col2:
+                st.metric("Ready to Execute", len(approved))
+            with col3:
+                stats = queue.get_stats()
+                st.metric("Total Processed", stats.get("executed", 0))
+
+            st.divider()
+
+            # Pending actions
+            if pending:
+                st.subheader("Pending Approval")
+
+                for entry in pending:
+                    action = entry.action
+                    with st.expander(
+                        f"**{action.action_type.value}**: {action.description or action.target_url or action.target_selector}"
+                    ):
+                        st.write(f"**Category:** {action.category.value}")
+                        st.write(f"**Created:** {entry.created_at[:16]}")
+
+                        if entry.preview_screenshot:
+                            try:
+                                st.image(entry.preview_screenshot, caption="Preview")
+                            except Exception:
+                                pass
+
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if st.button("Approve", key=f"approve_{action.action_id}", type="primary"):
+                                queue.approve_action(action.action_id)
+                                st.success("Approved!")
+                                st.rerun()
+                        with col2:
+                            if st.button("Reject", key=f"reject_{action.action_id}"):
+                                queue.reject_action(action.action_id, "Rejected by user")
+                                st.warning("Rejected")
+                                st.rerun()
+
+                if st.button("Approve All Pending", key="approve_all_pending"):
+                    count = queue.approve_all_pending()
+                    st.success(f"Approved {count} actions")
+                    st.rerun()
+            else:
+                st.info("No actions pending approval")
+
+            # Execute approved actions
+            st.divider()
+            if approved:
+                st.subheader("Execute Approved Actions")
+                st.write(f"{len(approved)} action(s) ready to execute")
+
+                if st.button("Execute All Approved", type="primary", key="execute_all_approved"):
+                    try:
+                        client = get_playwright_client()
+
+                        if not client.is_active:
+                            with st.spinner("Starting browser session..."):
+                                session = client.start_session()
+                                st.session_state.browser_session = session.to_dict()
+
+                        with st.spinner("Executing actions..."):
+                            for entry in approved:
+                                result = client.execute_action(entry.action)
+                                queue.mark_executed(entry.action.action_id)
+
+                                # Store in history
+                                st.session_state.browser_history.append({
+                                    "action": entry.action.to_dict(),
+                                    "result": result.to_dict(),
+                                    "timestamp": result.timestamp,
+                                })
+
+                                if result.success:
+                                    st.success(f"{entry.action.action_type.value}: OK")
+                                else:
+                                    st.error(f"{entry.action.action_type.value}: {result.error}")
+
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error executing actions: {e}")
+            else:
+                st.caption("No approved actions to execute")
+
+        # -------------------------------------------------------------------------
+        # CREDENTIALS
+        # -------------------------------------------------------------------------
+        elif browser_subtab == "Credentials":
+            st.subheader("Credential Management")
+            st.caption("Securely store login credentials for browser automation")
+
+            from ai_orchestrator.config import BROWSER_CREDENTIALS_DIR
+
+            BROWSER_CREDENTIALS_DIR.mkdir(parents=True, exist_ok=True)
+            cred_mgr = CredentialManager(BROWSER_CREDENTIALS_DIR)
+
+            # Check if master key is set
+            status = cred_mgr.get_status()
+            if not status["persistent"]:
+                st.warning(
+                    "BROWSER_MASTER_KEY not set. Credentials will not persist across restarts. "
+                    "Add it to your .env file for persistent encrypted storage."
+                )
+            else:
+                st.success("Credentials are encrypted and persistent")
+
+            st.divider()
+
+            # List existing credentials
+            sites = cred_mgr.list_sites()
+
+            if sites:
+                st.subheader("Stored Credentials")
+                for site_info in sites:
+                    site_id = site_info["site_id"]
+                    col1, col2, col3 = st.columns([3, 1, 1])
+                    with col1:
+                        icons = []
+                        if site_info["has_credentials"]:
+                            icons.append("Password")
+                        if site_info["has_state"]:
+                            icons.append("Cookies")
+                        st.write(f"**{site_id}** ({', '.join(icons)})")
+                    with col2:
+                        if st.button("Use", key=f"use_cred_{site_id}"):
+                            st.info(f"Site '{site_id}' will be used for next browser session")
+                    with col3:
+                        if st.button("Delete", key=f"del_cred_{site_id}"):
+                            cred_mgr.delete_credentials(site_id)
+                            st.success(f"Deleted credentials for {site_id}")
+                            st.rerun()
+            else:
+                st.info("No stored credentials")
+
+            st.divider()
+
+            # Add new credentials
+            st.subheader("Add Credentials")
+
+            site_id = st.text_input("Site identifier:", placeholder="github.com", key="cred_site")
+            username = st.text_input("Username/Email:", key="cred_username")
+            password = st.text_input("Password:", type="password", key="cred_password")
+
+            if st.button("Save Credentials", type="primary", key="save_creds"):
+                if site_id and (username or password):
+                    cred_mgr.save_credentials(
+                        site_id=site_id,
+                        username=username or None,
+                        password=password or None,
+                    )
+                    st.success(f"Credentials saved for {site_id}")
+                    st.rerun()
+                else:
+                    st.warning("Site identifier and at least username or password required")
+
+        # -------------------------------------------------------------------------
+        # HISTORY
+        # -------------------------------------------------------------------------
+        else:
+            st.subheader("Action History")
+
+            history = st.session_state.browser_history
+
+            if not history:
+                st.info("No actions executed yet")
+            else:
+                st.write(f"**{len(history)} action(s) in history**")
+
+                # Show most recent first, limit to 50
+                for i, entry in enumerate(reversed(history[-50:])):
+                    action = entry["action"]
+                    result = entry["result"]
+
+                    status_icon = "+" if result["success"] else "X"
+                    action_desc = action.get("description") or action.get("target_url") or action.get("target_selector") or "N/A"
+
+                    with st.expander(f"{status_icon} {action['action_type']}: {action_desc[:50]}"):
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.write(f"**Timestamp:** {entry['timestamp'][:19]}")
+                            st.write(f"**Latency:** {result['latency_ms']}ms")
+                        with col2:
+                            st.write(f"**Success:** {result['success']}")
+                            if result.get("page_url"):
+                                st.write(f"**URL:** {result['page_url'][:50]}...")
+
+                        if result.get("extracted_data"):
+                            st.write("**Extracted Data:**")
+                            st.text_area(
+                                "Data:",
+                                result["extracted_data"][:1000],
+                                disabled=True,
+                                key=f"hist_data_{i}",
+                                height=100,
+                            )
+
+                        if result.get("screenshot_path"):
+                            try:
+                                st.image(result["screenshot_path"], caption="Screenshot")
+                            except Exception:
+                                st.caption(f"Screenshot: {result['screenshot_path']}")
+
+                        if result.get("error"):
+                            st.error(f"Error: {result['error']}")
+
+                if st.button("Clear History", key="clear_browser_history"):
+                    st.session_state.browser_history = []
+                    st.success("History cleared")
+                    st.rerun()
