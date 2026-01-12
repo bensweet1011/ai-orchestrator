@@ -1,64 +1,92 @@
 {
-  "version": "1.0",
-  "last_updated": "2026-01-10",
+  "version": "2.0",
+  "last_updated": "2026-01-11",
   "currency": "USD",
   "models": {
+    "claude-opus-4-20250514": {
+      "provider": "anthropic",
+      "input_cost_per_1k": 0.005,
+      "output_cost_per_1k": 0.025,
+      "cached_input_cost_per_1k": 0.0005,
+      "notes": "Claude Opus 4.5 - maximum reasoning capability"
+    },
     "claude-sonnet-4-20250514": {
       "provider": "anthropic",
       "input_cost_per_1k": 0.003,
       "output_cost_per_1k": 0.015,
       "cached_input_cost_per_1k": 0.0003,
-      "notes": "Claude Sonnet 4"
+      "notes": "Claude Sonnet 4.5 - balanced performance"
     },
-    "claude-opus-4-20250514": {
+    "claude-haiku-4-5": {
       "provider": "anthropic",
-      "input_cost_per_1k": 0.015,
-      "output_cost_per_1k": 0.075,
-      "cached_input_cost_per_1k": 0.00175,
-      "notes": "Claude Opus 4"
+      "input_cost_per_1k": 0.00025,
+      "output_cost_per_1k": 0.00125,
+      "cached_input_cost_per_1k": 0.000025,
+      "notes": "Claude Haiku 4.5 - fast and efficient"
     },
-    "gpt-4o": {
+    "gpt-5.2": {
       "provider": "openai",
       "input_cost_per_1k": 0.005,
       "output_cost_per_1k": 0.015,
       "batch_discount": 0.5,
-      "notes": "GPT-4o"
+      "notes": "GPT-5.2 flagship model"
     },
-    "gpt-4-turbo": {
+    "gpt-5.2-codex": {
+      "provider": "openai",
+      "input_cost_per_1k": 0.002,
+      "output_cost_per_1k": 0.008,
+      "batch_discount": 0.5,
+      "notes": "GPT-5.2 Codex - code optimized"
+    },
+    "o3": {
       "provider": "openai",
       "input_cost_per_1k": 0.01,
-      "output_cost_per_1k": 0.03,
-      "notes": "GPT-4 Turbo"
+      "output_cost_per_1k": 0.04,
+      "notes": "o3 advanced reasoning model"
     },
-    "o1-preview": {
-      "provider": "openai",
-      "input_cost_per_1k": 0.015,
-      "output_cost_per_1k": 0.06,
-      "notes": "o1 reasoning model"
-    },
-    "o3-mini": {
+    "o4-mini": {
       "provider": "openai",
       "input_cost_per_1k": 0.0011,
       "output_cost_per_1k": 0.0044,
-      "notes": "o3-mini efficient reasoning"
+      "notes": "o4-mini efficient reasoning"
     },
-    "gemini-1.5-pro": {
+    "gemini-2.5-pro": {
       "provider": "google",
       "input_cost_per_1k": 0.00125,
-      "output_cost_per_1k": 0.005,
-      "notes": "Gemini 1.5 Pro"
-    },
-    "grok-2-latest": {
-      "provider": "xai",
-      "input_cost_per_1k": 0.002,
       "output_cost_per_1k": 0.01,
-      "notes": "Grok 2"
+      "notes": "Gemini 2.5 Pro - long context, multimodal"
     },
-    "llama-3.1-sonar-large-128k-online": {
+    "gemini-2.5-flash": {
+      "provider": "google",
+      "input_cost_per_1k": 0.00015,
+      "output_cost_per_1k": 0.0006,
+      "notes": "Gemini 2.5 Flash - fast and cost-effective"
+    },
+    "grok-4-1": {
+      "provider": "xai",
+      "input_cost_per_1k": 0.003,
+      "output_cost_per_1k": 0.015,
+      "notes": "Grok 4.1 - 2M context, real-time info"
+    },
+    "grok-4-1-fast": {
+      "provider": "xai",
+      "input_cost_per_1k": 0.0002,
+      "output_cost_per_1k": 0.0005,
+      "notes": "Grok 4.1 Fast - lower latency"
+    },
+    "sonar-pro": {
+      "provider": "perplexity",
+      "input_cost_per_1k": 0.003,
+      "output_cost_per_1k": 0.015,
+      "request_fee_per_1k": 6.0,
+      "notes": "Sonar Pro - web search with detailed answers"
+    },
+    "sonar": {
       "provider": "perplexity",
       "input_cost_per_1k": 0.001,
       "output_cost_per_1k": 0.001,
-      "notes": "Perplexity Sonar"
+      "request_fee_per_1k": 5.0,
+      "notes": "Sonar - fast web search"
     }
   }
 }

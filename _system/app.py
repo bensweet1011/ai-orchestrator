@@ -66,7 +66,7 @@ if "current_project" not in st.session_state:
 if "current_task" not in st.session_state:
     st.session_state.current_task = "general"
 if "selected_models" not in st.session_state:
-    st.session_state.selected_models = ["claude"]
+    st.session_state.selected_models = ["claude-opus"]
 if "execution_mode" not in st.session_state:
     st.session_state.execution_mode = "single"
 if "last_outputs" not in st.session_state:
@@ -330,8 +330,8 @@ with tab_chat:
             selected
             if selected
             else (
-                ["claude"]
-                if "claude" in available
+                ["claude-opus"]
+                if "claude-opus" in available
                 else [available[0]] if available else []
             )
         )

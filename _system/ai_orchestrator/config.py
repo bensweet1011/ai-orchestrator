@@ -31,61 +31,90 @@ class ModelInfo:
     available: bool = False
 
 
-# All supported models
+# All supported models (January 2026)
 MODELS: Dict[str, ModelInfo] = {
-    "claude": ModelInfo(
-        name="claude",
-        provider="anthropic",
-        model_id="claude-sonnet-4-20250514",
-        description="Claude Sonnet - strong all-around, excellent for writing and analysis",
-    ),
+    # Anthropic - Claude 4.5 series
     "claude-opus": ModelInfo(
         name="claude-opus",
         provider="anthropic",
         model_id="claude-opus-4-20250514",
-        description="Claude Opus - most capable, best for complex reasoning",
+        description="Claude Opus 4.5 - maximum reasoning, best for complex tasks (DEFAULT)",
     ),
-    "gpt4o": ModelInfo(
-        name="gpt4o",
+    "claude-sonnet": ModelInfo(
+        name="claude-sonnet",
+        provider="anthropic",
+        model_id="claude-sonnet-4-20250514",
+        description="Claude Sonnet 4.5 - balanced performance and cost",
+    ),
+    "claude-haiku": ModelInfo(
+        name="claude-haiku",
+        provider="anthropic",
+        model_id="claude-haiku-4-5",
+        description="Claude Haiku 4.5 - fast and efficient for simple tasks",
+    ),
+    # OpenAI - GPT-5 series
+    "gpt5": ModelInfo(
+        name="gpt5",
         provider="openai",
-        model_id="gpt-4o",
-        description="GPT-4o - fast, strong general purpose",
+        model_id="gpt-5.2",
+        description="GPT-5.2 - flagship model, strong general purpose",
     ),
-    "gpt4": ModelInfo(
-        name="gpt4",
+    "codex": ModelInfo(
+        name="codex",
         provider="openai",
-        model_id="gpt-4-turbo",
-        description="GPT-4 Turbo - high capability",
+        model_id="gpt-5.2-codex",
+        description="GPT-5.2 Codex - optimized for code generation",
     ),
-    "o1": ModelInfo(
-        name="o1",
+    "o3": ModelInfo(
+        name="o3",
         provider="openai",
-        model_id="o1-preview",
-        description="o1 - deep reasoning and analysis",
+        model_id="o3",
+        description="o3 - advanced reasoning model",
     ),
-    "o3-mini": ModelInfo(
-        name="o3-mini",
+    "o4-mini": ModelInfo(
+        name="o4-mini",
         provider="openai",
-        model_id="o3-mini",
-        description="o3-mini - efficient reasoning",
+        model_id="o4-mini",
+        description="o4-mini - efficient reasoning, lower cost",
     ),
+    # Google - Gemini 2.5 series
     "gemini": ModelInfo(
         name="gemini",
         provider="google",
-        model_id="gemini-1.5-pro",
-        description="Gemini 1.5 Pro - long context, multimodal",
+        model_id="gemini-2.5-pro",
+        description="Gemini 2.5 Pro - long context, multimodal",
     ),
+    "gemini-flash": ModelInfo(
+        name="gemini-flash",
+        provider="google",
+        model_id="gemini-2.5-flash",
+        description="Gemini 2.5 Flash - fast and cost-effective",
+    ),
+    # xAI - Grok 4 series
     "grok": ModelInfo(
         name="grok",
         provider="xai",
-        model_id="grok-2-latest",
-        description="Grok - real-time information access",
+        model_id="grok-4-1",
+        description="Grok 4.1 - real-time information, 2M context",
     ),
+    "grok-fast": ModelInfo(
+        name="grok-fast",
+        provider="xai",
+        model_id="grok-4-1-fast",
+        description="Grok 4.1 Fast - lower latency, lower cost",
+    ),
+    # Perplexity - Sonar series
     "perplexity": ModelInfo(
         name="perplexity",
         provider="perplexity",
-        model_id="llama-3.1-sonar-large-128k-online",
-        description="Perplexity - web search with citations",
+        model_id="sonar-pro",
+        description="Sonar Pro - web search with citations, detailed answers",
+    ),
+    "sonar": ModelInfo(
+        name="sonar",
+        provider="perplexity",
+        model_id="sonar",
+        description="Sonar - fast web search, concise answers",
     ),
 }
 

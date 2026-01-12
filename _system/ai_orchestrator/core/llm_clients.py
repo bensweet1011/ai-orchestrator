@@ -53,7 +53,7 @@ class LLMClients:
         # Google (Gemini)
         if GEMINI_AVAILABLE and os.environ.get("GOOGLE_API_KEY"):
             genai.configure(api_key=os.environ.get("GOOGLE_API_KEY"))
-            self.clients["google"] = genai.GenerativeModel("gemini-1.5-pro")
+            self.clients["google"] = genai.GenerativeModel("gemini-2.5-pro")
         
         # xAI (Grok) - uses OpenAI-compatible API
         if os.environ.get("XAI_API_KEY"):
@@ -95,19 +95,30 @@ class LLMClients:
             LLMResponse with content and metadata
         """
         
-        # Map model names to providers and model IDs
+        # Map model names to providers and model IDs (January 2026)
         model_map = {
-            "claude": ("anthropic", "claude-sonnet-4-20250514"),
-            "claude-sonnet": ("anthropic", "claude-sonnet-4-20250514"),
+            # Anthropic - Claude 4.5 series
             "claude-opus": ("anthropic", "claude-opus-4-20250514"),
-            "gpt4o": ("openai", "gpt-4o"),
-            "gpt-4o": ("openai", "gpt-4o"),
-            "gpt4": ("openai", "gpt-4-turbo"),
-            "o1": ("openai", "o1-preview"),
-            "o3-mini": ("openai", "o3-mini"),
-            "gemini": ("google", "gemini-1.5-pro"),
-            "grok": ("xai", "grok-2-latest"),
-            "perplexity": ("perplexity", "llama-3.1-sonar-large-128k-online"),
+            "claude-sonnet": ("anthropic", "claude-sonnet-4-20250514"),
+            "claude": ("anthropic", "claude-sonnet-4-20250514"),  # Legacy alias
+            "claude-haiku": ("anthropic", "claude-haiku-4-5"),
+            # OpenAI - GPT-5 series
+            "gpt5": ("openai", "gpt-5.2"),
+            "gpt-5": ("openai", "gpt-5.2"),
+            "codex": ("openai", "gpt-5.2-codex"),
+            "gpt5-codex": ("openai", "gpt-5.2-codex"),
+            "o3": ("openai", "o3"),
+            "o4-mini": ("openai", "o4-mini"),
+            # Google - Gemini 2.5 series
+            "gemini": ("google", "gemini-2.5-pro"),
+            "gemini-pro": ("google", "gemini-2.5-pro"),
+            "gemini-flash": ("google", "gemini-2.5-flash"),
+            # xAI - Grok 4 series
+            "grok": ("xai", "grok-4-1"),
+            "grok-fast": ("xai", "grok-4-1-fast"),
+            # Perplexity - Sonar series
+            "perplexity": ("perplexity", "sonar-pro"),
+            "sonar": ("perplexity", "sonar"),
         }
         
         if model not in model_map:
